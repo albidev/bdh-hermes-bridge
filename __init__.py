@@ -3,11 +3,17 @@ BDH Bridge — Bidirectional Hermes ↔ BDH Graph Harness integration.
 
 Write path: feeds session content to BDH after each API response.
 Read path: provides bdh_query and bdh_stats tools.
+
+v0.2.0:
+  - Echo-loop dampening: assistant responses flagged as source="assistant_response"
+  - User context capture: pre_llm_call hook stores last user message for write path
+  - Retry with exponential backoff on BDH requests
 """
 
 import json
 import logging
 import threading
+import time
 import urllib.request
 from urllib.error import URLError
 
@@ -17,45 +23,102 @@ BDH_API = "http://localhost:8643"
 _write_queue = []
 _queue_lock = threading.Lock()
 
+# ---------------------------------------------------------------------------
+# State: capture user message from pre_llm_call for write path
+# ---------------------------------------------------------------------------
+
+_last_user_message = ""
+
 
 # ---------------------------------------------------------------------------
-# BDH HTTP helpers
+# BDH HTTP helpers — with retry + exponential backoff
 # ---------------------------------------------------------------------------
 
-def _bdh_request(endpoint, data=None, timeout=10):
-    """Fire-and-forget HTTP request to BDH API."""
-    try:
-        url = f"{BDH_API}{endpoint}"
-        if data is not None:
-            body = json.dumps(data).encode()
-            req = urllib.request.Request(url, data=body,
-                                        headers={"Content-Type": "application/json"})
-        else:
-            req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read())
-    except (URLError, OSError, json.JSONDecodeError) as e:
-        logger.warning(f"BDH request failed: {e}")
-        return None
+def _bdh_request(endpoint, data=None, timeout=10, retries=3, backoff_base=2.0):
+    """HTTP request to BDH API with retry + exponential backoff.
+
+    Returns response dict on success, None after all retries exhausted.
+    """
+    url = f"{BDH_API}{endpoint}"
+    last_error = None
+
+    for attempt in range(retries):
+        try:
+            if data is not None:
+                body = json.dumps(data).encode()
+                req = urllib.request.Request(
+                    url, data=body,
+                    headers={"Content-Type": "application/json"},
+                )
+            else:
+                req = urllib.request.Request(url)
+
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read())
+
+        except (URLError, OSError, json.JSONDecodeError) as e:
+            last_error = e
+            if attempt < retries - 1:
+                wait = backoff_base ** attempt  # 1s, 2s, 4s
+                logger.warning(
+                    f"[bdh-bridge] request failed (attempt {attempt + 1}/{retries}): {e} "
+                    f"— retrying in {wait}s"
+                )
+                time.sleep(wait)
+
+    logger.error(f"[bdh-bridge] all {retries} retries exhausted for {endpoint}: {last_error}")
+    return None
 
 
-def _bdh_query_sync(query_text, timeout=15):
+def _bdh_query_sync(query_text, user_prompt=None, source=None, timeout=15):
     """Synchronous query to BDH — used by bdh_query tool."""
-    return _bdh_request("/api/query", {"query": query_text}, timeout=timeout)
+    payload = {"query": query_text}
+    if user_prompt:
+        payload["user_prompt"] = user_prompt
+    if source:
+        payload["source"] = source
+    return _bdh_request("/api/query", payload, timeout=timeout)
 
 
-def _bdh_query_async(query_text):
+def _bdh_query_async(query_text, user_prompt=None, source="assistant_response"):
     """Fire-and-forget query — used by hooks."""
     def _worker():
-        result = _bdh_request("/api/query", {"query": query_text}, timeout=20)
+        payload = {"query": query_text}
+        if user_prompt:
+            payload["user_prompt"] = user_prompt
+        if source:
+            payload["source"] = source
+
+        result = _bdh_request("/api/query", payload, timeout=20)
         if result:
             new = result.get("new_concepts", [])
             activated = len(result.get("activated_notes", []))
             hebbian = len(result.get("hebbian_updates", []))
             if new:
-                logger.info(f"[bdh-bridge] neurogenesis: {len(new)} new concepts "
-                            f"({activated} activated, {hebbian} hebbian updates)")
+                logger.info(
+                    f"[bdh-bridge] neurogenesis: {len(new)} new concepts "
+                    f"({activated} activated, {hebbian} hebbian updates)"
+                )
+        else:
+            logger.warning("[bdh-bridge] BDH unreachable — consolidation or server down")
+
     threading.Thread(target=_worker, daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
+# Hook: pre_llm_call — capture user message for write path context
+# ---------------------------------------------------------------------------
+
+def _on_pre_llm_call(**kwargs):
+    """Before the LLM generates, capture the user message.
+
+    This is used by post_api_request to include user context in BDH payloads,
+    enabling proper question→answer synaptic associations.
+    """
+    global _last_user_message
+    msg = kwargs.get("user_message", "")
+    if msg and isinstance(msg, str):
+        _last_user_message = msg
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +130,9 @@ def _on_post_api_request(**kwargs):
 
     Only fires on final responses (finish_reason == "stop") and only when
     the response is substantial enough to be worth querying.
+
+    Sends source="assistant_response" so BDH can dampen Hebbian learning
+    and prevent echo-loop reinforcement.
     """
     finish_reason = kwargs.get("finish_reason", "")
     if finish_reason != "stop":
@@ -86,7 +152,11 @@ def _on_post_api_request(**kwargs):
 
     # Truncate to avoid sending massive responses to BDH
     query = text[:1500]
-    _bdh_query_async(query)
+
+    # Include user context for proper question→answer associations
+    user_prompt = _last_user_message[:1500] if _last_user_message else None
+
+    _bdh_query_async(query, user_prompt=user_prompt, source="assistant_response")
 
 
 # ---------------------------------------------------------------------------
@@ -106,9 +176,12 @@ def _tool_bdh_query(args):
     if not query:
         return json.dumps({"error": "Missing 'query' parameter"})
 
-    result = _bdh_query_sync(query)
+    result = _bdh_query_sync(query, source="hermes_tool")
     if result is None:
-        return json.dumps({"error": "BDH server unreachable"})
+        return json.dumps({
+            "error": "BDH server unreachable — possibly in consolidation. "
+                     "Answer using your internal knowledge."
+        })
 
     # Format for LLM consumption
     output = {
@@ -133,7 +206,7 @@ def _tool_bdh_stats(args):
     """Get current BDH graph statistics.
 
     Returns:
-        JSON with neuron count, synapses, hebbian, dormant/active, avg_degree.
+        JSON with neuron count, active/dormant, synapses, hebbian, avg_degree.
     """
     result = _bdh_request("/api/stats", timeout=5)
     if result is None:
@@ -155,6 +228,9 @@ def _tool_bdh_stats(args):
 
 def register(ctx) -> None:
     """Register hooks and tools with the Hermes plugin context."""
+    # Hook: capture user message before LLM call
+    ctx.register_hook("pre_llm_call", _on_pre_llm_call)
+
     # Hook: feed BDH after each API response
     ctx.register_hook("post_api_request", _on_post_api_request)
 
@@ -173,4 +249,7 @@ def register(ctx) -> None:
                     "synapses, hebbian links, average degree."
     )
 
-    logger.info("[bdh-bridge] registered: hook=post_api_request, tools=[bdh_query, bdh_stats]")
+    logger.info(
+        "[bdh-bridge] registered: hooks=[pre_llm_call, post_api_request], "
+        "tools=[bdh_query, bdh_stats]"
+    )
