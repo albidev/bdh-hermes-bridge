@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="cover.png" alt="BDH Hermes Bridge" width="100%">
+</p>
+
 # bdh-hermes-bridge
 
 Bidirectional bridge between [Hermes Agent](https://github.com/NousResearch/hermes-agent) and [BDH Graph Harness](https://github.com/albidev/bdh-graph-harness).
