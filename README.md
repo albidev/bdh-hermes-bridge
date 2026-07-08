@@ -4,6 +4,31 @@ Bidirectional bridge between [Hermes Agent](https://github.com/NousResearch/herm
 
 Feeds Hermes session knowledge into BDH's neural graph, and exposes BDH context as tools Hermes can query.
 
+## About
+
+**BDH Hermes Bridge** is a plugin that connects Hermes Agent (an autonomous AI assistant) with BDH Graph Harness (a knowledge graph implementing biological neural network analogies from the [Dragon Hatchling paper](https://arxiv.org/abs/2509.26507)).
+
+The core idea: every conversation with Hermes becomes training data for a living knowledge graph. The graph learns from real usage — not fabricated queries — and grows organically through:
+
+- **Hebbian learning** — neurons that fire together wire together
+- **Neurogenesis** — new concepts born from conversation gaps
+- **Quality propagation** — activation scores ripple through the network
+- **Dormancy** — unused connections fade, keeping the graph clean
+
+Hermes, in turn, can query the graph for context it wouldn't otherwise have — surfacing connections between projects, past decisions, and technical knowledge buried in the vault.
+
+**This isn't a RAG pipeline.** It's a neural memory system that learns *what matters* by observing real interactions.
+
+### Key concepts
+
+| Concept | Description |
+|---------|-------------|
+| Neurons | Vault notes — atomic knowledge units |
+| Wikilink synapses | `[[wiki/links]]` between notes |
+| Hebbian synapses | Learned associations from co-activation |
+| Neurogenesis | New note creation when the graph detects knowledge gaps |
+| Dormancy | Low-quality nodes marked for pruning |
+
 ## What it does
 
 ### Write path — Hermes → BDH
