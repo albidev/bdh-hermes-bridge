@@ -70,7 +70,7 @@ def _bdh_request(endpoint, data=None, timeout=10, retries=3, backoff_base=2.0):
     return None
 
 
-def _bdh_query_sync(query_text, user_prompt=None, source=None, timeout=15):
+def _bdh_query_sync(query_text, user_prompt=None, source=None, timeout=120):
     """Synchronous query to BDH — used by bdh_query tool."""
     payload = {"query": query_text}
     if user_prompt:
@@ -89,7 +89,7 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response"):
         if source:
             payload["source"] = source
 
-        result = _bdh_request("/api/query", payload, timeout=20)
+        result = _bdh_request("/api/query", payload, timeout=120)
         if result:
             new = result.get("new_concepts", [])
             activated = len(result.get("activated_notes", []))
@@ -163,7 +163,7 @@ def _on_post_api_request(**kwargs):
 # Tool: bdh_query — query BDH graph for context
 # ---------------------------------------------------------------------------
 
-def _tool_bdh_query(args):
+def _tool_bdh_query(args, **kwargs):
     """Query the BDH knowledge graph.
 
     Args:
@@ -202,7 +202,7 @@ def _tool_bdh_query(args):
 # Tool: bdh_stats — quick graph stats
 # ---------------------------------------------------------------------------
 
-def _tool_bdh_stats(args):
+def _tool_bdh_stats(args, **kwargs):
     """Get current BDH graph statistics.
 
     Returns:
@@ -237,16 +237,35 @@ def register(ctx) -> None:
     # Tools: query BDH and get stats
     ctx.register_tool(
         "bdh_query",
+        "bdh",
+        {
+            "name": "bdh_query",
+            "description": "Query the BDH knowledge graph. Returns activated neurons, "
+                           "LLM response, and any new concepts created via neurogenesis. "
+                           "Use when you need context from the BDH graph about a topic.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The question or topic to search for in the knowledge graph."
+                    }
+                },
+                "required": ["query"]
+            }
+        },
         _tool_bdh_query,
-        description="Query the BDH knowledge graph. Returns activated neurons, "
-                    "LLM response, and any new concepts created via neurogenesis. "
-                    "Use when you need context from the BDH graph about a topic."
     )
     ctx.register_tool(
         "bdh_stats",
+        "bdh",
+        {
+            "name": "bdh_stats",
+            "description": "Get current BDH graph statistics: neuron count, active/dormant, "
+                           "synapses, hebbian links, average degree.",
+            "parameters": {"type": "object", "properties": {}}
+        },
         _tool_bdh_stats,
-        description="Get current BDH graph statistics: neuron count, active/dormant, "
-                    "synapses, hebbian links, average degree."
     )
 
     logger.info(
