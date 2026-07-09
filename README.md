@@ -47,7 +47,9 @@ Only fires on responses >200 chars (skips trivial acks like "done", "pushato").
 
 #### Echo-loop prevention
 
-The write path sends `source: "assistant_response"` in the payload. BDH applies dampened Hebbian learning (frequency += 0.3 instead of 1.0) to prevent feedback amplification where Hermes echoes BDH context back into the graph.
+The write path uses the **user message** as the embedding seed (query), not the assistant response. The assistant response is passed as `user_prompt` for LLM/neurogenesis context only. This prevents echo loops where embedding the response finds notes similar to what the graph already contains, reinforcing existing connections rather than discovering new ones.
+
+Additionally, the payload includes `source: "assistant_response"` which triggers dampened Hebbian learning (frequency += 0.3 instead of 1.0) to further prevent feedback amplification.
 
 #### User context capture
 
@@ -114,8 +116,8 @@ User asks Hermes a question
          │ response (>200 chars)
          ▼
   ┌──────────────┐
-  │ post_api_    │──► sends {query, user_prompt, source: "assistant_response"}
-  │ request hook │
+  │ post_api_    │──► sends {query: user_message, user_prompt: response,
+  │ request hook │       source: "assistant_response"}
   └──────┬───────┘
          │ fire-and-forget (with retry)
          ▼
