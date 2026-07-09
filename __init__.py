@@ -150,11 +150,14 @@ def _on_post_api_request(**kwargs):
     if not text.strip():
         return
 
-    # Truncate to avoid sending massive responses to BDH
-    query = text[:1500]
-
-    # Include user context for proper question→answer associations
-    user_prompt = _last_user_message[:1500] if _last_user_message else None
+    # Use the USER MESSAGE as the embedding seed (query) — that's the signal.
+    # The assistant response is passed as user_prompt for LLM/neurogenesis context.
+    # This prevents echo loops: embedding the response finds notes that are already
+    # similar to what the graph contains, reinforcing existing connections rather
+    # than discovering new ones. The question drives retrieval; the answer drives
+    # neurogenesis.
+    query = _last_user_message[:1500] if _last_user_message else text[:1500]
+    user_prompt = text[:1500]
 
     _bdh_query_async(query, user_prompt=user_prompt, source="assistant_response")
 
