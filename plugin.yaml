@@ -1,5 +1,5 @@
 name: bdh-hermes-bridge
-version: 0.2.0
+version: 0.3.0
 description: "Bidirectional bridge between Hermes Agent and BDH Graph Harness — auto-feeds sessions to BDH, provides BDH context as a tool."
 author: albi
 kind: standalone
