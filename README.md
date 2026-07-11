@@ -8,18 +8,48 @@ Bidirectional plugin bridge between [Hermes Agent](https://github.com/NousResear
 
 The plugin connects Hermes' real conversations to BDH's neural knowledge graph and exposes BDH context as native Hermes tools. It learns from actual usage — not fabricated bridge queries.
 
-> **Status:** standalone Hermes plugin, version **0.3.0**.
+> **Status:** standalone Hermes plugin, version **0.4.0**.
 
 ## What it does
 
+### Automatic read path — BDH → Hermes
+
+At `pre_llm_call`, the bridge captures the original user message and applies a conservative eligibility gate. It automatically retrieves context only for substantive technical or episodic messages — for example debugging, architecture, configuration, project questions, or references to earlier decisions. Casual messages such as “ciao”, “grazie”, and “ok” are skipped.
+
+Automatic retrieval sends:
+
+```json
+{
+  "query": "the original user message",
+  "source": "automatic_retrieval",
+  "learn": false,
+  "respond": false
+}
+```
+
+`learn: false` makes this a read-only retrieval: no Hebbian reinforcement and no neurogenesis. The result is returned from `pre_llm_call` as ephemeral context injected into the current user message:
+
+```text
+[BDH CONTEXT — optional]
+Activated neurons:
+- ...
+
+Relevant graph synthesis:
+...
+
+Use this as supporting context.
+Do not mention BDH unless relevant.
+If it conflicts with the current conversation, prefer the current conversation.
+[/BDH CONTEXT]
+```
+
+The original user message remains the primary signal. BDH context supports it; it never replaces it. If BDH is unavailable, the hook returns no context and Hermes continues with its normal prompt after a short bounded timeout.
+
+Automatic retrieval uses the vault's Hybrid index: Chroma cosine KNN plus BM25 lexical scoring. BDH exposes raw routing metadata (`vector_top_score`, `bm25_top_score`, `bm25_matched_terms`, `hybrid_top_score`, and `hybrid_margin`) before graph expansion. The bridge injects context when there are at least two lexical term matches or a strong semantic vector score. This is experimental routing logic; it does not modify Hebbian state.
+
 ### Automatic write path — Hermes → BDH
 
-The plugin registers two hooks:
-
-1. `pre_llm_call` captures the current user message in memory.
-2. `post_api_request` inspects each API response and, only for a substantial final response, sends a write request to BDH.
-
-The write path runs only when all of these conditions are met:
+The plugin registers `pre_llm_call` to capture the current user message and `post_api_request` to inspect each API response. Only a substantial final response is sent back to BDH:
 
 - `finish_reason == "stop"`
 - assistant content is at least **200 characters**
@@ -44,14 +74,14 @@ When `source` is `assistant_response`, BDH applies dampened Hebbian learning (`f
 
 ### On-demand read path — BDH → Hermes
 
-The plugin registers two tools in the `bdh` toolset:
+The plugin also registers two tools in the `bdh` toolset:
 
 | Tool | Purpose |
 |---|---|
-| `bdh_query` | Query the graph for relevant context, activated notes, BDH's response, new concepts, and Hebbian update count. |
+| `bdh_query` | Perform a deeper, intentional graph query during reasoning. Uses normal Hebbian learning (`frequency += 1.0`). |
 | `bdh_stats` | Return current graph metrics without querying the graph or triggering learning. |
 
-`bdh_query` is **available to the model but is not called automatically for every message**. Hermes decides when BDH context is useful. A tool query is sent with `source: "hermes_tool"`, which uses normal Hebbian learning (`frequency += 1.0`).
+Automatic retrieval provides lightweight initial context; `bdh_query` remains available when the model needs a targeted follow-up.
 
 Example tool input:
 
