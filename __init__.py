@@ -4,7 +4,12 @@ BDH Bridge — Bidirectional Hermes ↔ BDH Graph Harness integration.
 Write path: feeds session content to BDH after each API response.
 Read path: provides bdh_query and bdh_stats tools.
 
-v0.3.0:
+v0.4.0:
+  - Conditional automatic read-only retrieval in pre_llm_call
+  - Ephemeral BDH context injection via the Hermes hook contract
+  - learn=false/respond=false retrieval path avoids Hebbian updates and synthesis LLM
+  - Temporary [BDH] marker when bdh_query is actually used
+
   - Short timeouts for tool path (30s, 1 retry) — no more 6-min agent block
   - No retry on timeout for POST /api/query (prevents double plasticity/neurogenesis)
   - try/except in all hooks with list-content handling (Anthropic block format)
@@ -16,6 +21,7 @@ v0.3.0:
 import json
 import logging
 import os
+import re
 import threading
 import time
 import urllib.request
@@ -32,6 +38,14 @@ BDH_API = os.environ.get("BDH_API_URL", "http://localhost:8643")
 # ---------------------------------------------------------------------------
 
 _last_user_message = ""
+_bdh_used_sessions = set()
+_bdh_state_lock = threading.Lock()
+_AUTO_RETRIEVAL_MIN_SCORE = 0.30
+
+
+def _turn_key(kwargs):
+    """Return the stable key shared by tool and output hooks for this turn."""
+    return kwargs.get("session_id") or kwargs.get("task_id")
 
 
 # ---------------------------------------------------------------------------
@@ -90,21 +104,112 @@ def _bdh_request(endpoint, data=None, timeout=10, retries=1, backoff_base=2.0,
     return None
 
 
-def _bdh_query_sync(query_text, user_prompt=None, source=None, timeout=30):
-    """Synchronous query to BDH — used by bdh_query tool.
+def _bdh_query_sync(query_text, user_prompt=None, source=None, timeout=30,
+                    learn=True, retries=2):
+    """Synchronous query to BDH.
 
-    Short timeout (30s) and NO retry — this is a tool call from the agent,
-    so blocking for 6 minutes is unacceptable. If BDH is down, the agent
-    should fall back to its own knowledge.
+    ``learn=False`` is used by automatic pre-LLM retrieval: it must provide
+    context without changing Hebbian state or running neurogenesis.
     """
-    payload = {"query": query_text}
+    payload = {
+        "query": query_text,
+        "vault_id": "core",
+        "learn": learn,
+        "respond": not (source == "automatic_retrieval" and not learn),
+    }
     if user_prompt:
         payload["user_prompt"] = user_prompt
     if source:
         payload["source"] = source
-    # 1 retry only (so 2 total attempts), no retry on timeout
-    return _bdh_request("/api/query", payload, timeout=timeout, retries=2,
-                         retry_on_timeout=False)
+    return _bdh_request("/api/query", payload, timeout=timeout, retries=retries,
+                        retry_on_timeout=False)
+
+
+def _should_auto_retrieve(message):
+    """Skip trivial chatter; retrieve for any substantive user message.
+
+    This deliberately avoids a domain keyword list. BDH is domain-agnostic, and
+    a vocabulary gate would miss synonyms, other languages, and new concepts.
+    """
+    if not isinstance(message, str):
+        return False
+    text = message.strip()
+    if len(text) < 24:
+        return False
+
+    normalized = text.casefold()
+    casual = {
+        "ciao", "hello", "hi", "ok", "okay", "thanks", "thank you",
+        "grazie", "perfetto", "va bene", "bene", "sì", "si", "no",
+    }
+    if normalized.rstrip(".!?") in casual:
+        return False
+
+    # Avoid retrieval for pure acknowledgements with no information request.
+    if re.fullmatch(
+        r"(?:ok|okay|va bene|bene|perfetto|grazie|thanks|capito|ricevuto)"
+        r"(?:[.! ]+|$)",
+        normalized,
+    ):
+        return False
+
+    # Questions are eligible even when short; longer messages are treated as
+    # substantive without trying to guess their domain from keywords.
+    return "?" in text or len(text) >= 40
+
+
+def _has_relevant_bdh_context(result):
+    """Use raw Hybrid routing metadata as the semantic routing gate."""
+    if not isinstance(result, dict):
+        return False
+
+    routing = result.get("routing")
+    if isinstance(routing, dict):
+        hybrid = float(routing.get("hybrid_top_score", 0.0))
+        vector = float(routing.get("vector_top_score", 0.0))
+        matched = int(routing.get("bm25_matched_term_count", 0) or 0)
+        # Prefer lexical evidence; allow a strong semantic match for novel
+        # concepts that are not named exactly in the vault.
+        return (
+            hybrid >= _AUTO_RETRIEVAL_MIN_SCORE
+            and (matched >= 2 or vector >= 0.50)
+        )
+
+    # Backward-compatible fallback for older BDH servers.
+    scores = [
+        float(note.get("score", 0.0))
+        for note in (result.get("activated_notes") or [])
+        if isinstance(note, dict)
+    ]
+    return bool(scores) and max(scores) >= _AUTO_RETRIEVAL_MIN_SCORE
+
+
+def _format_bdh_context(result):
+    """Format BDH retrieval as ephemeral, clearly delimited model context."""
+    if not isinstance(result, dict):
+        return ""
+    notes = result.get("activated_notes") or []
+    synthesis = (result.get("response") or "").strip()
+    if not notes and not synthesis:
+        return ""
+
+    lines = ["[BDH CONTEXT — optional]"]
+    if notes:
+        lines.append("Activated neurons:")
+        for note in notes[:8]:
+            title = note.get("title", note.get("id", "unknown"))
+            score = note.get("score")
+            suffix = f" (score: {score})" if score is not None else ""
+            lines.append(f"- {title}{suffix}")
+    if synthesis:
+        lines.extend(["", "Relevant graph synthesis:", synthesis[:4000]])
+    lines.extend([
+        "", "Use this as supporting context.",
+        "Do not mention BDH unless relevant.",
+        "If it conflicts with the current conversation, prefer the current conversation.",
+        "[/BDH CONTEXT]",
+    ])
+    return "\n".join(lines)
 
 
 def _bdh_query_async(query_text, user_prompt=None, source="assistant_response"):
@@ -114,7 +219,7 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response"):
     exits quickly instead of piling up.
     """
     def _worker():
-        payload = {"query": query_text}
+        payload = {"query": query_text, "vault_id": "core"}
         if user_prompt:
             payload["user_prompt"] = user_prompt
         if source:
@@ -142,19 +247,41 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response"):
 # ---------------------------------------------------------------------------
 
 def _on_pre_llm_call(**kwargs):
-    """Before the LLM generates, capture the user message.
-
-    This is used by post_api_request to include user context in BDH payloads,
-    enabling proper question→answer synaptic associations.
-    """
+    """Capture the user message and optionally retrieve read-only BDH context."""
     global _last_user_message
     try:
+        # A new user turn starts here. Clear the previous debug marker so the
+        # tag cannot leak into the next answer in a long-lived session.
+        key = _turn_key(kwargs)
+        if key is not None:
+            with _bdh_state_lock:
+                _bdh_used_sessions.discard(str(key))
+
         msg = kwargs.get("user_message", "")
-        if msg and isinstance(msg, str):
-            _last_user_message = msg
+        if not isinstance(msg, str) or not msg.strip():
+            return None
+        _last_user_message = msg
+
+        if not _should_auto_retrieve(msg):
+            return None
+
+        # This hook must return before the model call, so retrieval is bounded
+        # and read-only. BDH failure simply means no optional context.
+        result = _bdh_query_sync(
+            msg[:1500],
+            source="automatic_retrieval",
+            timeout=2,
+            learn=False,
+            retries=1,
+        )
+        context = _format_bdh_context(result) if _has_relevant_bdh_context(result) else ""
+        if context:
+            logger.info("[bdh-bridge] automatic retrieval: context injected")
+            return {"context": context}
+        logger.debug("[bdh-bridge] automatic retrieval: below relevance threshold")
     except Exception as e:
         logger.debug(f"[bdh-bridge] pre_llm_call error: {e}")
-
+    return None
 
 # ---------------------------------------------------------------------------
 # Hook: post_api_request — feed BDH after each final response
@@ -222,6 +349,55 @@ def _on_post_api_request(**kwargs):
 
 
 # ---------------------------------------------------------------------------
+# Hooks: detect actual BDH tool use and mark the final answer for debugging
+# ---------------------------------------------------------------------------
+
+def _on_post_tool_call(**kwargs):
+    """Remember successful bdh_query use for the current turn."""
+    try:
+        if kwargs.get("tool_name") != "bdh_query":
+            return
+
+        result = kwargs.get("result", "") or ""
+        if isinstance(result, str):
+            try:
+                payload = json.loads(result)
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+        else:
+            payload = result if isinstance(result, dict) else {}
+
+        # Do not claim BDH was used if the tool only returned an error.
+        if not isinstance(payload, dict) or payload.get("error"):
+            return
+
+        key = _turn_key(kwargs)
+        if key is not None:
+            with _bdh_state_lock:
+                _bdh_used_sessions.add(str(key))
+    except Exception as e:
+        logger.debug(f"[bdh-bridge] post_tool_call debug marker error: {e}")
+
+
+def _on_transform_llm_output(**kwargs):
+    """Prepend a temporary [BDH] marker when bdh_query fed the answer."""
+    try:
+        text = kwargs.get("response_text")
+        if not isinstance(text, str):
+            return None
+
+        key = _turn_key(kwargs)
+        with _bdh_state_lock:
+            used = key is not None and str(key) in _bdh_used_sessions
+
+        if used and not text.startswith("[BDH]"):
+            return f"[BDH] {text}"
+    except Exception as e:
+        logger.debug(f"[bdh-bridge] transform_llm_output debug marker error: {e}")
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Tool: bdh_query — query BDH graph for context
 # ---------------------------------------------------------------------------
 
@@ -274,7 +450,7 @@ def _tool_bdh_stats(args, **kwargs):
         JSON with neuron count, active/dormant, synapses, hebbian, avg_degree.
     """
     try:
-        result = _bdh_request("/api/stats", timeout=5, retries=1)
+        result = _bdh_request("/api/stats?vault_id=core", timeout=5, retries=1)
         if result is None:
             return json.dumps({"error": "BDH server unreachable"})
         return json.dumps({
@@ -301,6 +477,10 @@ def register(ctx) -> None:
 
     # Hook: feed BDH after each API response
     ctx.register_hook("post_api_request", _on_post_api_request)
+
+    # Temporary debug marker: show when the model actually used bdh_query.
+    ctx.register_hook("post_tool_call", _on_post_tool_call)
+    ctx.register_hook("transform_llm_output", _on_transform_llm_output)
 
     # Tools: query BDH and get stats
     ctx.register_tool(
@@ -337,6 +517,7 @@ def register(ctx) -> None:
     )
 
     logger.info(
-        "[bdh-bridge] registered: hooks=[pre_llm_call, post_api_request], "
+        "[bdh-bridge] registered: hooks=[pre_llm_call, post_api_request, "
+        "post_tool_call, transform_llm_output], "
         f"tools=[bdh_query, bdh_stats], api={BDH_API}"
     )
