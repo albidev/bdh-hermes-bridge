@@ -25,6 +25,7 @@ import re
 import threading
 import time
 import urllib.request
+import urllib.parse
 from urllib.error import URLError
 
 logger = logging.getLogger("bdh-bridge")
@@ -105,7 +106,7 @@ def _bdh_request(endpoint, data=None, timeout=10, retries=1, backoff_base=2.0,
 
 
 def _bdh_query_sync(query_text, user_prompt=None, source=None, timeout=30,
-                    learn=True, retries=2):
+                    learn=True, retries=2, vault_id=None):
     """Synchronous query to BDH.
 
     ``learn=False`` is used by automatic pre-LLM retrieval: it must provide
@@ -113,10 +114,13 @@ def _bdh_query_sync(query_text, user_prompt=None, source=None, timeout=30,
     """
     payload = {
         "query": query_text,
-        "vault_id": "core",
         "learn": learn,
         "respond": not (source == "automatic_retrieval" and not learn),
     }
+    # Omit vault_id when not explicitly selected: BDH resolves its configured
+    # default_vault. Routing policy remains outside this low-level helper.
+    if vault_id:
+        payload["vault_id"] = vault_id
     if user_prompt:
         payload["user_prompt"] = user_prompt
     if source:
@@ -219,7 +223,7 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response"):
     exits quickly instead of piling up.
     """
     def _worker():
-        payload = {"query": query_text, "vault_id": "core"}
+        payload = {"query": query_text}
         if user_prompt:
             payload["user_prompt"] = user_prompt
         if source:
@@ -415,7 +419,11 @@ def _tool_bdh_query(args, **kwargs):
         if not query:
             return json.dumps({"error": "Missing 'query' parameter"})
 
-        result = _bdh_query_sync(query, source="hermes_tool")
+        result = _bdh_query_sync(
+            query,
+            source="hermes_tool",
+            vault_id=args.get("vault_id") or None,
+        )
         if result is None:
             return json.dumps({
                 "error": "BDH server unreachable — possibly in consolidation. "
@@ -450,7 +458,11 @@ def _tool_bdh_stats(args, **kwargs):
         JSON with neuron count, active/dormant, synapses, hebbian, avg_degree.
     """
     try:
-        result = _bdh_request("/api/stats?vault_id=core", timeout=5, retries=1)
+        vault_id = args.get("vault_id") if isinstance(args, dict) else None
+        endpoint = "/api/stats"
+        if vault_id:
+            endpoint += "?vault_id=" + urllib.parse.quote(vault_id, safe="")
+        result = _bdh_request(endpoint, timeout=5, retries=1)
         if result is None:
             return json.dumps({"error": "BDH server unreachable"})
         return json.dumps({
@@ -497,6 +509,10 @@ def register(ctx) -> None:
                     "query": {
                         "type": "string",
                         "description": "The question or topic to search for in the knowledge graph."
+                    },
+                    "vault_id": {
+                        "type": "string",
+                        "description": "Optional vault ID. Omit to use BDH's configured default vault."
                     }
                 },
                 "required": ["query"]
@@ -511,7 +527,15 @@ def register(ctx) -> None:
             "name": "bdh_stats",
             "description": "Get current BDH graph statistics: neuron count, active/dormant, "
                            "synapses, hebbian links, average degree.",
-            "parameters": {"type": "object", "properties": {}}
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "vault_id": {
+                        "type": "string",
+                        "description": "Optional vault ID. Omit to use BDH's configured default vault."
+                    }
+                }
+            }
         },
         _tool_bdh_stats,
     )
