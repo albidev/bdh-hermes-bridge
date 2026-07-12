@@ -132,3 +132,41 @@ def test_sync_query_marks_automatic_retrieval_read_only(monkeypatch):
     assert captured["data"]["learn"] is False
     assert captured["data"]["respond"] is False
     assert captured["data"]["source"] == "automatic_retrieval"
+
+
+def test_sync_query_omits_vault_when_not_selected(monkeypatch):
+    captured = {}
+
+    def fake_request(endpoint, data, **kwargs):
+        captured.update(endpoint=endpoint, data=data)
+        return {"response": "ok"}
+
+    monkeypatch.setattr(bridge, "_bdh_request", fake_request)
+    bridge._bdh_query_sync("query", source="hermes_tool")
+    assert "vault_id" not in captured["data"]
+
+
+def test_tool_query_passes_explicit_vault(monkeypatch):
+    captured = {}
+
+    def fake_query(query, **kwargs):
+        captured.update(query=query, kwargs=kwargs)
+        return {"activated_notes": [], "response": "ok"}
+
+    monkeypatch.setattr(bridge, "_bdh_query_sync", fake_query)
+    result = bridge._tool_bdh_query({"query": "research question", "vault_id": "research"})
+    assert '"response": "ok"' in result
+    assert captured["kwargs"]["vault_id"] == "research"
+
+
+def test_stats_omits_default_vault_and_encodes_explicit_id(monkeypatch):
+    endpoints = []
+
+    def fake_request(endpoint, **kwargs):
+        endpoints.append(endpoint)
+        return {}
+
+    monkeypatch.setattr(bridge, "_bdh_request", fake_request)
+    bridge._tool_bdh_stats({})
+    bridge._tool_bdh_stats({"vault_id": "research vault"})
+    assert endpoints == ["/api/stats", "/api/stats?vault_id=research%20vault"]
