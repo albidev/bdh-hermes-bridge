@@ -26,6 +26,7 @@ import threading
 import time
 import urllib.request
 import urllib.parse
+from pathlib import Path
 from urllib.error import URLError
 
 logger = logging.getLogger("bdh-bridge")
@@ -42,6 +43,43 @@ _last_user_message = ""
 _bdh_used_sessions = set()
 _bdh_state_lock = threading.Lock()
 _AUTO_RETRIEVAL_MIN_SCORE = 0.30
+_PROMPT_BLACKLIST_FILE = Path(
+    os.environ.get(
+        "BDH_PROMPT_BLACKLIST_FILE",
+        Path(__file__).with_name("prompt_blacklist.txt"),
+    )
+)
+
+
+def _is_prompt_blacklisted(message):
+    """Return True when a prompt is operational/meta text excluded from BDH.
+
+    The blacklist is intentionally file-backed so it can be edited without a
+    code change or restart. Empty lines and lines beginning with ``#`` are
+    ignored. Entries are case-insensitive literal substrings by default;
+    entries prefixed with ``re:`` are treated as regular expressions.
+    """
+    if not isinstance(message, str) or not message.strip():
+        return False
+    try:
+        lines = _PROMPT_BLACKLIST_FILE.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return False
+
+    text = message.casefold()
+    for raw_line in lines:
+        entry = raw_line.strip()
+        if not entry or entry.startswith("#"):
+            continue
+        if entry.casefold().startswith("re:"):
+            try:
+                if re.search(entry[3:], message, flags=re.IGNORECASE | re.DOTALL):
+                    return True
+            except re.error:
+                logger.warning("[bdh-bridge] invalid blacklist regex ignored: %s", entry)
+        elif entry.casefold() in text:
+            return True
+    return False
 
 
 def _turn_key(kwargs):
@@ -266,6 +304,10 @@ def _on_pre_llm_call(**kwargs):
             return None
         _last_user_message = msg
 
+        if _is_prompt_blacklisted(msg):
+            logger.info("[bdh-bridge] automatic retrieval skipped — prompt is blacklisted")
+            return None
+
         if not _should_auto_retrieve(msg):
             return None
 
@@ -339,6 +381,10 @@ def _on_post_api_request(**kwargs):
         # reinforcing existing connections instead of discovering new ones).
         if not _last_user_message or not _last_user_message.strip():
             logger.debug("[bdh-bridge] skipping write — no user message captured")
+            return
+
+        if _is_prompt_blacklisted(_last_user_message):
+            logger.info("[bdh-bridge] write skipped — prompt is blacklisted")
             return
 
         # Use the USER MESSAGE as the embedding seed (query) — that's the signal.

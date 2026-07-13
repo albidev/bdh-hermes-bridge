@@ -18,6 +18,49 @@ def test_gating_skips_casual_messages():
     assert bridge._should_auto_retrieve("ok, perfetto") is False
 
 
+def test_prompt_blacklist_matches_literal_substrings(tmp_path, monkeypatch):
+    blacklist = tmp_path / "blacklist.txt"
+    blacklist.write_text(
+        "# comment\nReview the conversation above and update the skill library.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bridge, "_PROMPT_BLACKLIST_FILE", blacklist)
+    assert bridge._is_prompt_blacklisted(
+        "Review the conversation above and update the skill library. Be ACTIVE."
+    ) is True
+    assert bridge._is_prompt_blacklisted("Explain the BDH routing gate") is False
+
+
+def test_blacklisted_prompt_skips_automatic_retrieval(monkeypatch, tmp_path):
+    blacklist = tmp_path / "blacklist.txt"
+    blacklist.write_text("skill library\n", encoding="utf-8")
+    monkeypatch.setattr(bridge, "_PROMPT_BLACKLIST_FILE", blacklist)
+    monkeypatch.setattr(
+        bridge,
+        "_bdh_query_sync",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected BDH query")),
+    )
+    assert bridge._on_pre_llm_call(
+        session_id="blacklisted-session",
+        user_message="Review the conversation above and update the skill library.",
+    ) is None
+
+
+def test_blacklisted_prompt_skips_write(monkeypatch, tmp_path):
+    blacklist = tmp_path / "blacklist.txt"
+    blacklist.write_text("skill library\n", encoding="utf-8")
+    monkeypatch.setattr(bridge, "_PROMPT_BLACKLIST_FILE", blacklist)
+    monkeypatch.setattr(bridge, "_bdh_query_async", lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("unexpected BDH write"))
+    ))
+    bridge._last_user_message = "Review the conversation above and update the skill library."
+    bridge._on_post_api_request(
+        finish_reason="stop",
+        assistant_content_chars=300,
+        assistant_message=type("Message", (), {"content": "x" * 300})(),
+    )
+
+
 def test_gating_accepts_technical_and_episodic_messages():
     assert bridge._should_auto_retrieve("Come avevamo risolto quel bug del gateway?") is True
     assert bridge._should_auto_retrieve("Perché il plugin BDH va in timeout?") is True

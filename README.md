@@ -47,6 +47,20 @@ The original user message remains the primary signal. BDH context supports it; i
 
 Automatic retrieval uses the vault's Hybrid index: Chroma cosine KNN plus BM25 lexical scoring. BDH exposes raw routing metadata (`vector_top_score`, `bm25_top_score`, `bm25_matched_terms`, `hybrid_top_score`, and `hybrid_margin`) before graph expansion. The bridge injects context when there are at least two lexical term matches or a strong semantic vector score. This is experimental routing logic; it does not modify Hebbian state.
 
+#### Prompt blacklist
+
+Operational prompts that should not become graph knowledge can be excluded through `prompt_blacklist.txt` in the plugin directory. The file is read at hook time, so edits take effect without a restart:
+
+```text
+# Case-insensitive literal substring, comments and blank lines ignored
+Review the conversation above and update the skill library.
+
+# Optional regular expression
+re:^nightly consolidation prompt:
+```
+
+A blacklisted prompt skips both automatic read retrieval and the asynchronous write/neurogenesis path. Set `BDH_PROMPT_BLACKLIST_FILE` to use a different file. This filter applies to bridge hooks; an explicit `bdh_query` tool call remains intentional and is not silently blocked.
+
 ### Automatic write path — Hermes → BDH
 
 The plugin registers `pre_llm_call` to capture the current user message and `post_api_request` to inspect each API response. Only a substantial final response is sent back to BDH:
