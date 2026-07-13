@@ -18,6 +18,116 @@ def test_gating_skips_casual_messages():
     assert bridge._should_auto_retrieve("ok, perfetto") is False
 
 
+def test_prompt_blacklist_matches_literal_substrings(tmp_path, monkeypatch):
+    blacklist = tmp_path / "blacklist.txt"
+    blacklist.write_text(
+        "# comment\nReview the conversation above and update the skill library.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bridge, "_PROMPT_BLACKLIST_FILE", blacklist)
+    assert bridge._is_prompt_blacklisted(
+        "Review the conversation above and update the skill library. Be ACTIVE."
+    ) is True
+    assert bridge._is_prompt_blacklisted("Explain the BDH routing gate") is False
+
+
+def test_blacklisted_prompt_skips_automatic_retrieval(monkeypatch, tmp_path):
+    blacklist = tmp_path / "blacklist.txt"
+    blacklist.write_text("skill library\n", encoding="utf-8")
+    monkeypatch.setattr(bridge, "_PROMPT_BLACKLIST_FILE", blacklist)
+    monkeypatch.setattr(
+        bridge,
+        "_bdh_query_sync",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unexpected BDH query")),
+    )
+    assert bridge._on_pre_llm_call(
+        session_id="blacklisted-session",
+        user_message="Review the conversation above and update the skill library.",
+    ) is None
+
+
+def test_blacklisted_prompt_skips_write(monkeypatch, tmp_path):
+    blacklist = tmp_path / "blacklist.txt"
+    blacklist.write_text("skill library\n", encoding="utf-8")
+    monkeypatch.setattr(bridge, "_PROMPT_BLACKLIST_FILE", blacklist)
+    monkeypatch.setattr(bridge, "_bdh_query_async", lambda *args, **kwargs: (
+        (_ for _ in ()).throw(AssertionError("unexpected BDH write"))
+    ))
+    bridge._last_user_message = "Review the conversation above and update the skill library."
+    bridge._on_post_api_request(
+        finish_reason="stop",
+        assistant_content_chars=300,
+        assistant_message=type("Message", (), {"content": "x" * 300})(),
+    )
+
+
+def test_cron_skips_automatic_retrieval_by_default(monkeypatch):
+    monkeypatch.setattr(
+        bridge,
+        "_bdh_query_sync",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cron queried BDH")),
+    )
+    assert bridge._on_pre_llm_call(
+        session_id="cron-session",
+        platform="cron",
+        user_message="Review the latest project architecture and explain the changes.",
+    ) is None
+
+
+def test_cron_skips_write_by_default(monkeypatch):
+    writes = []
+    monkeypatch.setattr(
+        bridge,
+        "_bdh_query_async",
+        lambda *args, **kwargs: writes.append((args, kwargs)),
+    )
+    bridge._last_user_message = "Review the latest project architecture and explain the changes."
+    bridge._on_post_api_request(
+        platform="cron",
+        finish_reason="stop",
+        assistant_content_chars=300,
+        assistant_message=type("Message", (), {"content": "x" * 300})(),
+    )
+    assert writes == []
+
+
+def test_cron_bdh_opt_in_allows_read_and_write(monkeypatch):
+    calls = []
+
+    def fake_sync(query, **kwargs):
+        calls.append(("read", query, kwargs))
+        return {
+            "routing": {
+                "hybrid_top_score": 0.8,
+                "vector_top_score": 0.8,
+                "bm25_matched_term_count": 2,
+            },
+            "activated_notes": [{"id": "n1", "title": "Cron BDH", "score": 0.91}],
+            "response": "Relevant context.",
+        }
+
+    def fake_async(query, **kwargs):
+        calls.append(("write", query, kwargs))
+
+    monkeypatch.setattr(bridge, "_bdh_query_sync", fake_sync)
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    prompt = f"{bridge.BDH_CRON_OPT_IN_MARKER} Explain the scheduled BDH ingestion status."
+    result = bridge._on_pre_llm_call(
+        session_id="cron-session",
+        platform="cron",
+        user_message=prompt,
+    )
+    assert result and "context" in result
+
+    bridge._on_post_api_request(
+        platform="cron",
+        finish_reason="stop",
+        assistant_content_chars=300,
+        assistant_message=type("Message", (), {"content": "x" * 300})(),
+    )
+    assert [kind for kind, *_ in calls] == ["read", "write"]
+
+
 def test_gating_accepts_technical_and_episodic_messages():
     assert bridge._should_auto_retrieve("Come avevamo risolto quel bug del gateway?") is True
     assert bridge._should_auto_retrieve("Perché il plugin BDH va in timeout?") is True
