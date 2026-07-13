@@ -43,6 +43,9 @@ _last_user_message = ""
 _bdh_used_sessions = set()
 _bdh_state_lock = threading.Lock()
 _AUTO_RETRIEVAL_MIN_SCORE = 0.30
+# Cron jobs are operational by default. A job must opt in explicitly in its
+# own prompt before the bridge may read from or write to BDH.
+BDH_CRON_OPT_IN_MARKER = "[BDH:ALLOW-CRON]"
 _PROMPT_BLACKLIST_FILE = Path(
     os.environ.get(
         "BDH_PROMPT_BLACKLIST_FILE",
@@ -80,6 +83,17 @@ def _is_prompt_blacklisted(message):
         elif entry.casefold() in text:
             return True
     return False
+
+
+def _is_cron_source(platform=None, source=None):
+    """Return True for Hermes scheduled-agent hook calls."""
+    value = platform or source or ""
+    return str(value).strip().casefold() == "cron"
+
+
+def _cron_has_bdh_opt_in(message):
+    """Allow BDH for a cron only when its own prompt opts in explicitly."""
+    return isinstance(message, str) and BDH_CRON_OPT_IN_MARKER in message
 
 
 def _turn_key(kwargs):
@@ -304,6 +318,10 @@ def _on_pre_llm_call(**kwargs):
             return None
         _last_user_message = msg
 
+        if _is_cron_source(kwargs.get("platform"), kwargs.get("source")) and not _cron_has_bdh_opt_in(msg):
+            logger.info("[bdh-bridge] automatic retrieval skipped — cron source is deny-by-default")
+            return None
+
         if _is_prompt_blacklisted(msg):
             logger.info("[bdh-bridge] automatic retrieval skipped — prompt is blacklisted")
             return None
@@ -349,6 +367,10 @@ def _on_post_api_request(**kwargs):
     try:
         finish_reason = kwargs.get("finish_reason", "")
         if finish_reason != "stop":
+            return
+
+        if _is_cron_source(kwargs.get("platform"), kwargs.get("source")) and not _cron_has_bdh_opt_in(_last_user_message):
+            logger.info("[bdh-bridge] write skipped — cron source is deny-by-default")
             return
 
         content_chars = kwargs.get("assistant_content_chars", 0) or 0

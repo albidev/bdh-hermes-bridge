@@ -47,6 +47,17 @@ The original user message remains the primary signal. BDH context supports it; i
 
 Automatic retrieval uses the vault's Hybrid index: Chroma cosine KNN plus BM25 lexical scoring. BDH exposes raw routing metadata (`vector_top_score`, `bm25_top_score`, `bm25_matched_terms`, `hybrid_top_score`, and `hybrid_margin`) before graph expansion. The bridge injects context when there are at least two lexical term matches or a strong semantic vector score. This is experimental routing logic; it does not modify Hebbian state.
 
+### Cron isolation — deny by default
+
+Hermes passes scheduled-agent calls to plugins with `platform="cron"`. The bridge treats this as an isolation boundary:
+
+- cron jobs do **not** use automatic BDH retrieval;
+- cron responses do **not** enter the asynchronous BDH write/neurogenesis path;
+- the policy is enforced at both `pre_llm_call` and `post_api_request`, so it does not depend on prompt wording or the job's loaded skills;
+- an agent cron may opt in explicitly by placing `[BDH:ALLOW-CRON]` in its own prompt.
+
+The opt-in is intentionally visible and per-job. The default for operational, news, social, watchdog, and maintenance crons is no BDH traffic. The dedicated `no_agent` BDH consolidation script remains independent from this bridge policy.
+
 #### Prompt blacklist
 
 Operational prompts that should not become graph knowledge can be excluded through `prompt_blacklist.txt` in the plugin directory. The file is read at hook time, so edits take effect without a restart:
