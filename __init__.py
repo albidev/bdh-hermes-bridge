@@ -4,12 +4,20 @@ BDH Bridge — Bidirectional Hermes ↔ BDH Graph Harness integration.
 Write path: feeds session content to BDH after each API response.
 Read path: provides bdh_query and bdh_stats tools.
 
+v0.5.0:
+  - LLM-based query classification + rewrite before BDH retrieval
+  - Semantic gate replaces mechanical eligibility check (knowledge vs operational noise)
+  - Context recovery from conversation_history (last N messages, no state.db needed)
+  - Write path uses the rewritten query as embedding seed (read/write consistency)
+  - Classification=false skips both read AND write (anti-vault-pollution)
+  - Feature flag BDH_QUERY_REWRITE_ENABLED (default: false, opt-in)
+  - Fallback to mechanical gate + raw query on LLM timeout/parse failure
+
 v0.4.0:
   - Conditional automatic read-only retrieval in pre_llm_call
   - Ephemeral BDH context injection via the Hermes hook contract
   - learn=false/respond=false retrieval path avoids Hebbian updates and synthesis LLM
   - Temporary [BDH] marker when bdh_query is actually used
-
   - Short timeouts for tool path (30s, 1 retry) — no more 6-min agent block
   - No retry on timeout for POST /api/query (prevents double plasticity/neurogenesis)
   - try/except in all hooks with list-content handling (Anthropic block format)
@@ -40,6 +48,8 @@ BDH_API = os.environ.get("BDH_API_URL", "http://localhost:8643")
 # ---------------------------------------------------------------------------
 
 _last_user_message = ""
+_last_rewritten_query = ""       # rewritten query from classification (write path consistency)
+_last_should_query = None       # classification result (None = no classification done)
 _bdh_used_sessions = set()
 _bdh_state_lock = threading.Lock()
 _AUTO_RETRIEVAL_MIN_SCORE = 0.30
@@ -51,6 +61,43 @@ _PROMPT_BLACKLIST_FILE = Path(
         "BDH_PROMPT_BLACKLIST_FILE",
         Path(__file__).with_name("prompt_blacklist.txt"),
     )
+)
+
+# ---------------------------------------------------------------------------
+# Query rewrite pipeline config (v0.5.0)
+# ---------------------------------------------------------------------------
+
+_QUERY_REWRITE_ENABLED = os.environ.get("BDH_QUERY_REWRITE_ENABLED", "").lower() in (
+    "1", "true", "yes", "on",
+)
+_REWRITE_MODEL = os.environ.get("BDH_REWRITE_MODEL", "deepseek-v4-flash")
+_REWRITE_TIMEOUT = int(os.environ.get("BDH_REWRITE_TIMEOUT", "5"))
+_REWRITE_API_URL = os.environ.get("BDH_REWRITE_API_URL", "https://ollama.com/v1")
+_REWRITE_API_KEY = os.environ.get(
+    "BDH_REWRITE_API_KEY",
+    os.environ.get("OLLAMA_API_KEY", ""),
+)
+_REWRITE_HTTP_REFERER = os.environ.get("BDH_REWRITE_HTTP_REFERER", "")
+_REWRITE_APP_TITLE = os.environ.get("BDH_REWRITE_APP_TITLE", "BDH Hermes Bridge")
+_CONTEXT_MESSAGES_N = int(os.environ.get("BDH_CONTEXT_MESSAGES_N", "6"))
+_CONTEXT_MSG_MAX_CHARS = int(os.environ.get("BDH_CONTEXT_MSG_MAX_CHARS", "200"))
+
+_REWRITE_SYSTEM_PROMPT = (
+    "You are a query router for a personal knowledge graph.\n"
+    "The graph stores: concepts, decisions, architecture choices, "
+    "project context, lessons learned, strategies, and factual "
+    "knowledge about the user's projects and workflow. It does NOT "
+    "store operational commands, system diagnostics, or transient "
+    "task status.\n"
+    "Given the user message and recent conversation context, decide:\n"
+    "1. Does this message contain knowledge that connects to other "
+    "concepts already in the graph? (decisions, explanations, facts, "
+    "strategies, architecture, lessons — NOT commands, acks, "
+    "diagnostics, or status)\n"
+    "2. If yes, rewrite it as a clear, search-friendly query.\n"
+    "3. If the message covers multiple topics, generate sub-queries.\n"
+    "Reply as JSON:\n"
+    '{"should_query": true|false, "query": "...", "sub_queries": ["...", "..."]}'
 )
 
 
@@ -299,12 +346,144 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response"):
 
 
 # ---------------------------------------------------------------------------
+# Query rewrite pipeline (v0.5.0)
+# ---------------------------------------------------------------------------
+
+def _extract_context(conversation_history, n=_CONTEXT_MESSAGES_N,
+                     max_chars=_CONTEXT_MSG_MAX_CHARS):
+    """Extract last N messages from conversation_history as compact text.
+
+    Hermes passes conversation_history in pre_llm_call kwargs. Each entry
+    is typically a dict with 'role' and 'content' keys. We extract just the
+    text, truncated, to give the rewrite LLM enough context without flooding it.
+    """
+    if not isinstance(conversation_history, list) or not conversation_history:
+        return ""
+
+    lines = []
+    # Take the last n messages
+    for msg in conversation_history[-n:]:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role", "?")
+        content = msg.get("content", "")
+        # Handle Anthropic block format
+        if isinstance(content, list):
+            content = " ".join(
+                block.get("text", "") if isinstance(block, dict) else str(block)
+                for block in content
+            )
+        elif not isinstance(content, str):
+            content = str(content)
+        content = content.strip()
+        if not content:
+            continue
+        lines.append(f"[{role}] {content[:max_chars]}")
+
+    return "\n".join(lines)
+
+
+def _rewrite_query(user_message, context_text=""):
+    """Call the rewrite LLM to classify + rewrite the user message.
+
+    Returns a dict with:
+      - should_query: bool (whether BDH should be queried)
+      - query: str (rewritten query, or original if fallback)
+      - sub_queries: list[str] (additional queries if multi-topic)
+
+    On any failure (timeout, parse error, network), returns None so the
+    caller falls back to the mechanical gate + raw user message.
+    """
+    if not _REWRITE_API_KEY:
+        logger.debug("[bdh-bridge] rewrite skipped — no OLLAMA_API_KEY set")
+        return None
+
+    user_content = f"User message:\n{user_message[:1500]}"
+    if context_text:
+        user_content += f"\n\nRecent context:\n{context_text}"
+
+    payload = {
+        "model": _REWRITE_MODEL,
+        "messages": [
+            {"role": "system", "content": _REWRITE_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        "temperature": 0.1,
+        "stream": False,
+        # Force JSON response format if the API supports it
+        "format": "json",
+    }
+
+    url = f"{_REWRITE_API_URL}/chat/completions"
+    body = json.dumps(payload).encode()
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {_REWRITE_API_KEY}",
+    }
+    if _REWRITE_HTTP_REFERER:
+        headers["HTTP-Referer"] = _REWRITE_HTTP_REFERER
+    if _REWRITE_APP_TITLE:
+        headers["X-Title"] = _REWRITE_APP_TITLE
+
+    try:
+        req = urllib.request.Request(url, data=body, headers=headers)
+        with urllib.request.urlopen(req, timeout=_REWRITE_TIMEOUT) as resp:
+            data = json.loads(resp.read())
+
+        # OpenAI-compatible response format
+        choice = data.get("choices", [{}])[0]
+        content = choice.get("message", {}).get("content", "")
+
+        # Strip markdown code fences if present
+        content = content.strip()
+        if content.startswith("```"):
+            content = re.sub(r"^```(?:json)?\s*", "", content)
+            content = re.sub(r"\s*```$", "", content)
+
+        result = json.loads(content)
+
+        should_query = bool(result.get("should_query", True))
+        query = result.get("query", "").strip() or user_message
+        sub_queries = [
+            sq.strip() for sq in result.get("sub_queries", [])
+            if isinstance(sq, str) and sq.strip()
+        ]
+
+        logger.info(
+            f"[bdh-bridge] rewrite: should_query={should_query}, "
+            f"query={query[:80]!r}, sub_queries={len(sub_queries)}"
+        )
+        return {
+            "should_query": should_query,
+            "query": query,
+            "sub_queries": sub_queries,
+        }
+
+    except (URLError, OSError) as e:
+        reason = getattr(e, 'reason', '')
+        if 'timed out' in str(reason).lower() or 'timeout' in str(reason).lower():
+            logger.debug(f"[bdh-bridge] rewrite LLM timeout ({_REWRITE_TIMEOUT}s) — fallback to raw")
+        else:
+            logger.debug(f"[bdh-bridge] rewrite LLM error: {e} — fallback to raw")
+        return None
+    except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
+        logger.debug(f"[bdh-bridge] rewrite LLM parse error: {e} — fallback to raw")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Hook: pre_llm_call — capture user message for write path context
 # ---------------------------------------------------------------------------
 
 def _on_pre_llm_call(**kwargs):
-    """Capture the user message and optionally retrieve read-only BDH context."""
-    global _last_user_message
+    """Capture the user message and optionally retrieve read-only BDH context.
+
+    v0.5.0: when BDH_QUERY_REWRITE_ENABLED is true, the hook first calls an
+    LLM to classify + rewrite the user message. If the LLM says should_query=false,
+    both read and write paths are skipped (anti-vault-pollution). On any LLM
+    failure, it falls back to the mechanical gate + raw user message.
+    """
+    global _last_user_message, _last_rewritten_query, _last_should_query
     try:
         # A new user turn starts here. Clear the previous debug marker so the
         # tag cannot leak into the next answer in a long-lived session.
@@ -317,6 +496,8 @@ def _on_pre_llm_call(**kwargs):
         if not isinstance(msg, str) or not msg.strip():
             return None
         _last_user_message = msg
+        _last_rewritten_query = ""       # reset per turn
+        _last_should_query = None        # reset per turn
 
         if _is_cron_source(kwargs.get("platform"), kwargs.get("source")) and not _cron_has_bdh_opt_in(msg):
             logger.info("[bdh-bridge] automatic retrieval skipped — cron source is deny-by-default")
@@ -326,13 +507,38 @@ def _on_pre_llm_call(**kwargs):
             logger.info("[bdh-bridge] automatic retrieval skipped — prompt is blacklisted")
             return None
 
-        if not _should_auto_retrieve(msg):
-            return None
+        # ── Query rewrite pipeline ──────────────────────────────────────
+        if _QUERY_REWRITE_ENABLED:
+            # Extract context from conversation_history
+            context_text = _extract_context(kwargs.get("conversation_history"))
 
-        # This hook must return before the model call, so retrieval is bounded
-        # and read-only. BDH failure simply means no optional context.
+            # Call the rewrite LLM (classify + rewrite in one shot)
+            rewrite_result = _rewrite_query(msg, context_text)
+
+            if rewrite_result is not None:
+                _last_should_query = rewrite_result["should_query"]
+                _last_rewritten_query = rewrite_result["query"]
+
+                if not rewrite_result["should_query"]:
+                    logger.info("[bdh-bridge] rewrite: LLM classified as non-knowledge — skip read+write")
+                    return None
+
+                # Use the rewritten query for BDH retrieval
+                bdh_query = rewrite_result["query"][:1500]
+            else:
+                # Fallback: LLM failed, use mechanical gate + raw message
+                if not _should_auto_retrieve(msg):
+                    return None
+                bdh_query = msg[:1500]
+        else:
+            # Feature flag off: use mechanical gate + raw message (v0.4.0 behavior)
+            if not _should_auto_retrieve(msg):
+                return None
+            bdh_query = msg[:1500]
+
+        # ── BDH retrieval (read-only) ──────────────────────────────────
         result = _bdh_query_sync(
-            msg[:1500],
+            bdh_query,
             source="automatic_retrieval",
             timeout=2,
             learn=False,
@@ -409,9 +615,17 @@ def _on_post_api_request(**kwargs):
             logger.info("[bdh-bridge] write skipped — prompt is blacklisted")
             return
 
+        # v0.5.0: if classification said should_query=false, skip the write too.
+        # This prevents operational noise from polluting the vault via the
+        # write path even when the read path was already skipped.
+        if _last_should_query is False:
+            logger.info("[bdh-bridge] write skipped — LLM classified as non-knowledge")
+            return
+
         # Use the USER MESSAGE as the embedding seed (query) — that's the signal.
         # The assistant response is passed as user_prompt for LLM/neurogenesis context.
-        query = _last_user_message[:1500]
+        # v0.5.0: prefer the rewritten query for read/write consistency.
+        query = (_last_rewritten_query or _last_user_message)[:1500]
         user_prompt = text[:1500]
 
         _bdh_query_async(query, user_prompt=user_prompt, source="assistant_response")
