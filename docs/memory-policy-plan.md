@@ -1,6 +1,6 @@
 # Piano operativo — Memoria Hermes a due livelli (Honcho + BDH)
 
-> Canonical plan issue: https://github.com/albidev/bdh-hermes-bridge/issues/N
+> Canonical plan issue: https://github.com/albidev/bdh-hermes-bridge/issues/5
 > Vault mirror: `~/Documents/Hermes/wiki/plans/two-tier-memory-honcho-bdh.md`
 
 **Obiettivo:** separare *user model* (Honcho) e *project knowledge* (BDH) con un
