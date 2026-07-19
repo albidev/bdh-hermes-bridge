@@ -1,121 +1,119 @@
-# Piano operativo — Memoria Hermes a due livelli (Honcho + BDH)
+# Operational Plan — Two-Tier Hermes Memory (Honcho + BDH)
 
 > Canonical plan issue: https://github.com/albidev/bdh-hermes-bridge/issues/5
 > Vault mirror: `~/Documents/Hermes/wiki/plans/two-tier-memory-honcho-bdh.md`
 
-**Obiettivo:** separare *user model* (Honcho) e *project knowledge* (BDH) con un
-contratto di ownership / scope / provenance, senza toccare il core Hermes.
+**Goal:** Separate the *user model* (Honcho) from *project knowledge* (BDH) with an
+ownership / scope / provenance contract, without touching the Hermes core.
 
-**Architettura:**
+**Architecture:**
 
 ```
 Hermes MemoryManager
-   └── Honcho            = user profile / preferenze / pattern
+   └── Honcho            = user profile / preferences / patterns
 BDH bridge plugin
-   ├── read  (pre_llm_call, già fatto)
-   └── write (post_api_request, da vincolare)
+   ├── read  (pre_llm_call, already implemented)
+   └── write (post_api_request, to be constrained)
 Policy/contract layer
-   └── decide ownership + scope + provenance
+   └── decides ownership + scope + provenance
 ```
 
-**Vincolo fondamentale:** `MemoryManager` ammette un solo external provider →
-BDH **non** va registrato come secondo `MemoryProvider`. Si agisce nel bridge.
+**Hard constraint:** `MemoryManager` allows only one external provider → BDH must
+**not** be registered as a second `MemoryProvider`. Changes happen in the bridge.
 
 ---
 
-## Fase 0 — Memory contract (senza cambiare comportamento)
+## Phase 0 — Memory contract (no behavior change)
 
-Repo `bdh-hermes-bridge`, nuovo modulo `memory_contract.py`.
+New module `memory_contract.py` in `bdh-hermes-bridge`.
 
-- Enum tipi: `user_profile`, `project_fact`, `project_decision`,
+- Type enum: `user_profile`, `project_fact`, `project_decision`,
   `project_concept`, `project_lesson`, `policy_constraint`, `episodic_only`,
   `discard`.
-- Struttura candidato: `kind`, `content`, `scope{type,id}`, `owner`,
+- Candidate structure: `kind`, `content`, `scope{type,id}`, `owner`,
   `confidence`, `source{session,platform,message,timestamp}`, `status`.
-- Regola: `owner` = dove può diventare memoria; `scope` = quanto può essere
-  riusato.
-- Test: classificazione positiva / negativa / conflitto.
+- Rule: `owner` = where it may become persistent memory; `scope` = how far it can
+  be reused.
+- Tests: positive / negative / conflict classification.
 
-## Fase 1 — Modalità `observe-only`
+## Phase 1 — `observe-only` mode
 
-- Config nel bridge: `memory_policy.mode: observe`, log dei candidati, nessuna
-  nuova scrittura.
-- Misurare alcuni giorni di uso reale:
-  - decisioni riconosciute vs perse;
-  - preferenze erroneamente inviate a BDH;
-  - rumore promosso;
-  - casi `unknown`.
-- **Go/No-go:** solo dopo i dati reali si passa a enforce.
+- Bridge config: `memory_policy.mode: observe`, log candidates, no new writes.
+- Measure a few days of real usage:
+  - decisions recognized vs missed;
+  - preferences wrongly sent to BDH;
+  - noise promoted;
+  - `unknown` cases.
+- **Go/No-go:** only after real data move to enforce.
 
-## Fase 2 — Enforce write path
+## Phase 2 — Enforce write path
 
-- `post_api_request` invia a BDH **solo** `project_*` (fact / decision /
+- `post_api_request` sends to BDH **only** `project_*` (fact / decision /
   concept / lesson).
-- Honcho continua a ricevere il turno per il proprio user model.
-- `policy_constraint` → config / policy, non memoria semantica.
-- `episodic_only` → session history. `discard` → ignorato.
-- Fix: la soglia di lunghezza non basta; serve classificazione semantica prima
-  della scrittura BDH.
+- Honcho still receives the turn for its own user model.
+- `policy_constraint` → config / policy, not semantic memory.
+- `episodic_only` → session history. `discard` → ignored.
+- Fix: a length threshold is not enough; semantic classification is required
+  before any BDH write.
 
-## Fase 3 — Read path esplicito
+## Phase 3 — Explicit read path
 
-- Due blocchi separati nel prompt: `USER CONTEXT` (Honcho) e
-  `PROJECT KNOWLEDGE` (BDH). Niente blocco unico `memory-context`.
-- Precedenza: policy > decisione scoped > fatto con provenance > preferenza
-  globale > inferenza debole.
-- Decisione scoped prevale su preferenza generale dell'utente.
+- Two separate prompt blocks: `USER CONTEXT` (Honcho) and
+  `PROJECT KNOWLEDGE` (BDH). No single `memory-context` block.
+- Precedence: policy > scoped decision > fact with provenance > global
+  preference > weak inference.
+- A scoped decision beats a global user preference.
 
-## Fase 4 — Provenance su BDH
+## Phase 4 — Provenance on BDH
 
-- `bdh-graph-harness`: il write path accetta `scope`, `kind`, `source`,
+- `bdh-graph-harness`: the write path accepts `scope`, `kind`, `source`,
   `status`.
-- Note con tipo esplicito: `decision` / `fact` / `lesson` / `concept`.
-- Stato `superseded` per decisioni obsolete (tombstone, non delete cieco).
+- Notes carry an explicit type: `decision` / `fact` / `lesson` / `concept`.
+- `superseded` status for obsolete decisions (tombstone, not blind delete).
 
 ---
 
-## File da toccare
+## Files to touch
 
-- `bdh-hermes-bridge/memory_contract.py` (nuovo)
-- `bdh-hermes-bridge/__init__.py` (applica policy, modalità observe/enforce,
-  log routing)
-- `bdh-hermes-bridge/test_memory_contract.py` (nuovo)
-- `bdh-hermes-bridge/test_bdh_bridge.py` (estendi con routing + conflitto)
-- `bdh-graph-harness`: note con metadata; nessun nuovo servizio / DB.
+- `bdh-hermes-bridge/memory_contract.py` (new)
+- `bdh-hermes-bridge/__init__.py` (apply policy, observe/enforce modes,
+  routing log)
+- `bdh-hermes-bridge/test_memory_contract.py` (new)
+- `bdh-hermes-bridge/test_bdh_bridge.py` (extend with routing + conflict)
+- `bdh-graph-harness`: notes with metadata; no new service / DB.
 
-**Hermes core:** nessuna modifica in Fase 0–4.
+**Hermes core:** no changes in Phases 0–4.
 
 ---
 
-## Test minimi obbligatori
+## Minimum required tests
 
-- **Positivi:** "abbiamo deciso X" → `project_decision` in BDH; "il watcher
-  ricostruisce BM25" → `project_fact`.
-- **Negativi:** "preferisco risposte concise" → Honcho; "ciao grazie" →
-  `discard`; "mi ha fatto perdere tempo" → mai BDH.
-- **Conflitto:** preferenza globale Honcho vs decisione scoped BDH → vince BDH.
-- **Provenance:** ogni memoria promossa deve rispondere a sessione / messaggio /
+- **Positive:** "we decided X" → `project_decision` in BDH; "the watcher
+  rebuilds BM25" → `project_fact`.
+- **Negative:** "I prefer concise answers" → Honcho; "hi thanks" →
+  `discard`; "that wasted my time" → never BDH.
+- **Conflict:** global Honcho preference vs scoped BDH decision → BDH wins.
+- **Provenance:** every promoted memory must answer session / message /
   scope / confidence / status.
 
-## Criteri di successo
+## Success criteria
 
-- Honcho senza regressioni.
-- BDH non riceve più preferenze generiche.
-- Decisioni tecniche nel vault con provenance.
-- Query casuali non attivano scritture.
-- Un progetto non inquina l'altro vault.
-- Il sistema spiega perché un candidato è stato scritto o scartato.
+- Honcho without regressions.
+- BDH no longer receives generic preferences.
+- Technical decisions land in the vault with provenance.
+- Casual queries do not trigger writes.
+- One project does not contaminate another vault.
+- The system can explain why a candidate was written or discarded.
 
-## Ordine di esecuzione
+## Execution order
 
 1. Memory contract
 2. Observe-only
-3. Test su conversazioni reali
+3. Tests on real conversations
 4. Enforce BDH
-5. Metadata note BDH
+5. BDH note metadata
 6. Conflict resolution
-7. (solo dopo) eventuale estensione core Hermes
+7. (only after) possible Hermes core extension
 
-Prima modifica concreta: **router di ownership osservabile** davanti alle
-scritture BDH, con Honcho / Hermes intatti finché non abbiamo i dati sui casi
-ambigui.
+First concrete change: an **observable ownership router** in front of BDH writes,
+with Honcho / Hermes intact until we have data on the ambiguous cases.
