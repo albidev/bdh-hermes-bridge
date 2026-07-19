@@ -73,7 +73,12 @@ _QUERY_REWRITE_ENABLED = os.environ.get("BDH_QUERY_REWRITE_ENABLED", "").lower()
 _REWRITE_MODEL = os.environ.get("BDH_REWRITE_MODEL", "deepseek-v4-flash")
 _REWRITE_TIMEOUT = int(os.environ.get("BDH_REWRITE_TIMEOUT", "5"))
 _REWRITE_API_URL = os.environ.get("BDH_REWRITE_API_URL", "https://ollama.com/v1")
-_REWRITE_API_KEY = os.environ.get("OLLAMA_API_KEY", "")
+_REWRITE_API_KEY = os.environ.get(
+    "BDH_REWRITE_API_KEY",
+    os.environ.get("OLLAMA_API_KEY", ""),
+)
+_REWRITE_HTTP_REFERER = os.environ.get("BDH_REWRITE_HTTP_REFERER", "")
+_REWRITE_APP_TITLE = os.environ.get("BDH_REWRITE_APP_TITLE", "BDH Hermes Bridge")
 _CONTEXT_MESSAGES_N = int(os.environ.get("BDH_CONTEXT_MESSAGES_N", "6"))
 _CONTEXT_MSG_MAX_CHARS = int(os.environ.get("BDH_CONTEXT_MSG_MAX_CHARS", "200"))
 
@@ -415,6 +420,10 @@ def _rewrite_query(user_message, context_text=""):
         "Content-Type": "application/json",
         "Authorization": f"Bearer {_REWRITE_API_KEY}",
     }
+    if _REWRITE_HTTP_REFERER:
+        headers["HTTP-Referer"] = _REWRITE_HTTP_REFERER
+    if _REWRITE_APP_TITLE:
+        headers["X-Title"] = _REWRITE_APP_TITLE
 
     try:
         req = urllib.request.Request(url, data=body, headers=headers)
