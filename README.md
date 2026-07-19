@@ -8,7 +8,7 @@ Bidirectional plugin bridge between [Hermes Agent](https://github.com/NousResear
 
 The plugin connects Hermes' real conversations to BDH's neural knowledge graph and exposes BDH context as native Hermes tools. It learns from actual usage — not fabricated bridge queries.
 
-> **Status:** standalone Hermes plugin, version **0.4.0**.
+> **Status:** standalone Hermes plugin, version **0.5.0**.
 
 ## What it does
 
@@ -46,6 +46,54 @@ If it conflicts with the current conversation, prefer the current conversation.
 The original user message remains the primary signal. BDH context supports it; it never replaces it. If BDH is unavailable, the hook returns no context and Hermes continues with its normal prompt after a short bounded timeout.
 
 Automatic retrieval uses the vault's Hybrid index: Chroma cosine KNN plus BM25 lexical scoring. BDH exposes raw routing metadata (`vector_top_score`, `bm25_top_score`, `bm25_matched_terms`, `hybrid_top_score`, and `hybrid_margin`) before graph expansion. The bridge injects context when there are at least two lexical term matches or a strong semantic vector score. This is experimental routing logic; it does not modify Hebbian state.
+
+### Query classification + rewrite pipeline (v0.5.0, opt-in)
+
+When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessing step before BDH retrieval. A single LLM call combines **classification** (should this message query the graph?) and **rewrite** (produce a search-friendly query) using the last N messages from `conversation_history` as context.
+
+**Why:** colloquial messages are often poor embedding seeds. The rewrite step converts them into concise, search-oriented representations. The classification gate also prevents transient operational noise from polluting the vault — both read and write paths are skipped when the LLM says the message contains no knowledge.
+
+**The graph is domain-agnostic:** the classification prompt describes the vault as storing concepts, decisions, architecture choices, project context, lessons learned, strategies, and factual knowledge — not limited to technical content.
+
+**Context recovery:** Hermes passes `conversation_history` in the `pre_llm_call` hook kwargs. The bridge extracts the last N messages (default 6, configurable), truncates each to 200 chars, and feeds them to the rewrite LLM. No state.db access needed.
+
+**Fallback:** if the rewrite LLM times out, returns invalid JSON, or is unreachable, the bridge falls back to the mechanical gate + raw user message (v0.4.0 behavior). The pipeline is an enhancement, never a blocker.
+
+**Write path consistency:** the rewritten query is stored and reused as the embedding seed in `post_api_request`. This ensures read and write paths use the same signal.
+
+**Configuration:**
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `BDH_QUERY_REWRITE_ENABLED` | `false` | Feature flag (opt-in) |
+| `BDH_REWRITE_MODEL` | `deepseek-v4-flash` | OpenAI-compatible model for classification + rewrite |
+| `BDH_REWRITE_TIMEOUT` | `5` | LLM call timeout in seconds |
+| `BDH_REWRITE_API_URL` | `https://ollama.com/v1` | OpenAI-compatible endpoint (OpenRouter: `https://openrouter.ai/api/v1`) |
+| `BDH_REWRITE_API_KEY` | (from env) | Dedicated API key for the rewrite LLM |
+| `BDH_REWRITE_HTTP_REFERER` | empty | Optional OpenRouter attribution header |
+| `BDH_REWRITE_APP_TITLE` | `BDH Hermes Bridge` | Optional OpenRouter application title |
+| `BDH_CONTEXT_MESSAGES_N` | `6` | Number of conversation_history messages to include |
+| `BDH_CONTEXT_MSG_MAX_CHARS` | `200` | Max chars per context message |
+
+**Classification prompt:**
+
+```text
+You are a query router for a personal knowledge graph.
+The graph stores: concepts, decisions, architecture choices,
+project context, lessons learned, strategies, and factual
+knowledge about the user's projects and workflow. It does NOT
+store operational commands, system diagnostics, or transient
+task status.
+
+Given the user message and recent conversation context, decide:
+1. Does this message contain knowledge that connects to other
+   concepts already in the graph?
+2. If yes, rewrite it as a clear, search-friendly query.
+3. If the message covers multiple topics, generate sub-queries.
+
+Reply as JSON:
+{"should_query": true|false, "query": "...", "sub_queries": ["...", "..."]}
+```
 
 ### Cron isolation — deny by default
 
@@ -146,6 +194,8 @@ BDH requests are made through a small HTTP helper with configurable base URL and
 
 | Path | Timeout | Attempts | Timeout retry |
 |---|---:|---:|---|
+| Rewrite LLM (classify + rewrite) | 5s | 1 | N/A — falls back to mechanical gate |
+| Automatic read hook | 2s | 1 | N/A |
 | Automatic write hook | 30s | 2 total | No |
 | `bdh_query` tool | 30s | 2 total | No |
 | `bdh_stats` tool | 5s | 1 | N/A |
@@ -163,12 +213,27 @@ Other transient request failures can use the bounded retry path with exponential
 ## Architecture
 
 ```text
-User message
+User message + conversation_history
      │
      ▼
 pre_llm_call
      │ captures user_message
+     │
+     ├─ [if BDH_QUERY_REWRITE_ENABLED] ─────────────────────┐
+     │   extract context from conversation_history           │
+     │   LLM classify + rewrite (OpenAI-compatible, 5s)      │
+     │   should_query=false → skip read AND write             │
+     │   should_query=true  → rewritten query                │
+     │   LLM failure → fallback to mechanical gate + raw     │
+     │ ──────────────────────────────────────────────────────┘
+     │
      ▼
+BDH /api/query (read-only, learn=false)
+     │
+     ├── hybrid retrieval (Chroma KNN + BM25)
+     ├── relevance gate (hybrid ≥ 0.30)
+     └── context injection [BDH CONTEXT]
+     │
 Hermes LLM ────────────────┐
      │                     │ may call bdh_query
      │ final response      │ source: hermes_tool
@@ -176,12 +241,13 @@ Hermes LLM ────────────────┐
 post_api_request           │
      │                     │
      │ if stop + >200 chars│
+     │ classification=false → skip write
      │ source: assistant_response
      ▼                     │
 BDH /api/query ◄───────────┘
      │
      ├── retrieval / activation
-     ├── dampened Hebbian update
+     ├── dampened Hebbian update (0.3)
      ├── quality propagation
      └── neurogenesis when justified
 ```
@@ -236,11 +302,13 @@ Plugins are loaded at process startup. Editing `__init__.py` without restarting 
 
 ```yaml
 name: bdh-hermes-bridge
-version: 0.3.0
+version: 0.5.0
 kind: standalone
 provides_hooks:
   - pre_llm_call
   - post_api_request
+  - post_tool_call
+  - transform_llm_output
 provides_tools:
   - bdh_query
   - bdh_stats
