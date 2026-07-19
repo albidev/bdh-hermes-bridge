@@ -1,5 +1,5 @@
 name: bdh-hermes-bridge
-version: 0.4.0
+version: 0.5.0
 description: "Bidirectional bridge between Hermes Agent and BDH Graph Harness — conditionally retrieves read-only context before LLM calls, auto-feeds completed sessions, and provides BDH tools."
 author: albi
 kind: standalone
