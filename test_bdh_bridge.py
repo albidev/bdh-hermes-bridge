@@ -93,6 +93,9 @@ def test_cron_skips_write_by_default(monkeypatch):
 
 
 def test_cron_bdh_opt_in_allows_read_and_write(monkeypatch):
+    # This test exercises the legacy cron opt-in path; keep the rewrite LLM
+    # disabled so it remains deterministic regardless of the host environment.
+    monkeypatch.setattr(bridge, "_QUERY_REWRITE_ENABLED", False)
     calls = []
 
     def fake_sync(query, **kwargs):

@@ -66,10 +66,12 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 | Env var | Default | Purpose |
 |---|---|---|
 | `BDH_QUERY_REWRITE_ENABLED` | `false` | Feature flag (opt-in) |
-| `BDH_REWRITE_MODEL` | `deepseek-v4-flash` | Ollama-cloud model for classification + rewrite |
+| `BDH_REWRITE_MODEL` | `deepseek-v4-flash` | OpenAI-compatible model for classification + rewrite |
 | `BDH_REWRITE_TIMEOUT` | `5` | LLM call timeout in seconds |
-| `BDH_REWRITE_API_URL` | `https://ollama.com/v1` | OpenAI-compatible endpoint |
-| `OLLAMA_API_KEY` | (from env) | API key for the rewrite LLM |
+| `BDH_REWRITE_API_URL` | `https://ollama.com/v1` | OpenAI-compatible endpoint (OpenRouter: `https://openrouter.ai/api/v1`) |
+| `BDH_REWRITE_API_KEY` | (from env) | Dedicated API key for the rewrite LLM |
+| `BDH_REWRITE_HTTP_REFERER` | empty | Optional OpenRouter attribution header |
+| `BDH_REWRITE_APP_TITLE` | `BDH Hermes Bridge` | Optional OpenRouter application title |
 | `BDH_CONTEXT_MESSAGES_N` | `6` | Number of conversation_history messages to include |
 | `BDH_CONTEXT_MSG_MAX_CHARS` | `200` | Max chars per context message |
 
@@ -219,7 +221,7 @@ pre_llm_call
      │
      ├─ [if BDH_QUERY_REWRITE_ENABLED] ─────────────────────┐
      │   extract context from conversation_history           │
-     │   LLM classify + rewrite (deepseek-v4-flash, 5s)      │
+     │   LLM classify + rewrite (OpenAI-compatible, 5s)      │
      │   should_query=false → skip read AND write             │
      │   should_query=true  → rewritten query                │
      │   LLM failure → fallback to mechanical gate + raw     │
