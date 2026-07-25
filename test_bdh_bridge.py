@@ -155,12 +155,12 @@ def test_pre_llm_returns_ephemeral_context_for_eligible_message(monkeypatch):
         user_message="Come avevamo risolto quel bug del gateway?",
     )
 
-    assert calls[0][1] == {
-        "source": "automatic_retrieval",
-        "timeout": 2,
-        "learn": False,
-        "retries": 1,
-    }
+    assert calls[0][1]["source"] == "automatic_retrieval"
+    assert calls[0][1]["timeout"] == 2
+    assert calls[0][1]["learn"] is False
+    assert calls[0][1]["retries"] == 1
+    assert isinstance(calls[0][1]["query_variants"], list)
+    assert calls[0][1]["query_variants"]
     assert result and "context" in result
     assert "[BDH CONTEXT — optional]" in result["context"]
     assert "Gateway recovery" in result["context"]
@@ -527,7 +527,7 @@ def test_pre_llm_with_rewrite_uses_rewritten_query(monkeypatch):
         user_message="senti ma pensavo ad una cosa sul bridge",
         conversation_history=[{"role": "user", "content": "precedente"}],
     )
-    assert captured[0] == "english technical query"
+    assert captured[0] == "rewritten technical query"
 
 
 def test_pre_llm_falls_back_on_rewrite_failure(monkeypatch):
@@ -763,7 +763,7 @@ def test_pre_llm_uses_normalized_search_query_for_retrieval(monkeypatch):
         session_id="s1",
         user_message="senti ma pensavo ad una cosa sul bridge",
     )
-    assert captured[0] == "english technical query\nrelated topic"
+    assert captured[0] == "rewritten technical query"
 
 
 def test_post_api_uses_original_query_for_write_with_variants(monkeypatch):
