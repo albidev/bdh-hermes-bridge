@@ -8,7 +8,7 @@ Bidirectional plugin bridge between [Hermes Agent](https://github.com/NousResear
 
 The plugin connects Hermes' real conversations to BDH's neural knowledge graph and exposes BDH context as native Hermes tools. It learns from actual usage — not fabricated bridge queries.
 
-> **Status:** standalone Hermes plugin, version **0.5.0**.
+> **Status:** standalone Hermes plugin, version **0.6.0**.
 
 ## What it does
 
@@ -16,11 +16,13 @@ The plugin connects Hermes' real conversations to BDH's neural knowledge graph a
 
 At `pre_llm_call`, the bridge captures the original user message and applies a conservative eligibility gate. It automatically retrieves context only for substantive technical or episodic messages — for example debugging, architecture, configuration, project questions, or references to earlier decisions. Casual messages such as “ciao”, “grazie”, and “ok” are skipped.
 
+When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge first asks a small LLM to classify and optionally rewrite the message. The **read path** uses `search_query` (an optimized/English/keyword form when helpful); the **write path** always keeps the original user-language `query`. If the LLM says the message is operational noise, both paths are skipped.
+
 Automatic retrieval sends:
 
 ```json
 {
-  "query": "the original user message",
+  "query": "optimized search_query or original message",
   "source": "automatic_retrieval",
   "learn": false,
   "respond": false
@@ -49,9 +51,13 @@ Automatic retrieval uses the vault's Hybrid index: Chroma cosine KNN plus BM25 l
 
 ### Query classification + rewrite pipeline (v0.5.0, opt-in)
 
-When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessing step before BDH retrieval. A single LLM call combines **classification** (should this message query the graph?) and **rewrite** (produce a search-friendly query) using the last N messages from `conversation_history` as context.
+When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessing step before BDH retrieval. A single LLM call combines **classification** (should this message query the graph?), **rewrite** (`query` in the user's language), and an optional **search query** (`search_query`) that can be tuned for a specific vault.
 
-**Why:** colloquial messages are often poor embedding seeds. The rewrite step converts them into concise, search-oriented representations. The classification gate also prevents transient operational noise from polluting the vault — both read and write paths are skipped when the LLM says the message contains no knowledge.
+**Why:** colloquial messages are often poor embedding seeds. The rewrite step converts them into concise, search-oriented representations. The optional `search_query` lets the bridge adapt to vaults that are mostly English even when the user speaks another language. The classification gate also prevents transient operational noise from polluting the vault — both read and write paths are skipped when the LLM says the message contains no knowledge.
+
+**Read vs write path:**
+- **Read** (`pre_llm_call` automatic retrieval): uses `search_query` if provided; otherwise falls back to `query`.
+- **Write** (`post_api_request` learning): always uses `query` (the user's language/intent), never `search_query`, so BDH learns from real user language rather than translated artifacts.
 
 **The graph is domain-agnostic:** the classification prompt describes the vault as storing concepts, decisions, architecture choices, project context, lessons learned, strategies, and factual knowledge — not limited to technical content.
 
@@ -59,7 +65,13 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 
 **Fallback:** if the rewrite LLM times out, returns invalid JSON, or is unreachable, the bridge falls back to the mechanical gate + raw user message (v0.4.0 behavior). The pipeline is an enhancement, never a blocker.
 
-**Write path consistency:** the rewritten query is stored and reused as the embedding seed in `post_api_request`. This ensures read and write paths use the same signal.
+**Write path consistency:** the user-language `query` is stored and reused as the embedding seed in `post_api_request`. This ensures the write signal reflects real user intent.
+
+**Custom prompt override:** the default prompt is embedded, but you can point to an external Markdown file with `BDH_REWRITE_PROMPT_FILE`. The file is reloaded on every call, so edits take effect without a plugin restart. The default output schema still applies:
+
+```json
+{"should_query": true|false, "query": "...", "search_query": "...", "sub_queries": ["...", "..."]}
+```
 
 **Configuration:**
 
@@ -72,10 +84,11 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 | `BDH_REWRITE_API_KEY` | (from env) | Dedicated API key for the rewrite LLM |
 | `BDH_REWRITE_HTTP_REFERER` | empty | Optional OpenRouter attribution header |
 | `BDH_REWRITE_APP_TITLE` | `BDH Hermes Bridge` | Optional OpenRouter application title |
+| `BDH_REWRITE_PROMPT_FILE` | empty | Path to custom Markdown prompt file |
 | `BDH_CONTEXT_MESSAGES_N` | `6` | Number of conversation_history messages to include |
 | `BDH_CONTEXT_MSG_MAX_CHARS` | `200` | Max chars per context message |
 
-**Classification prompt:**
+**Default classification prompt:**
 
 ```text
 You are a query router for a personal knowledge graph.
@@ -90,9 +103,12 @@ Given the user message and recent conversation context, decide:
    concepts already in the graph?
 2. If yes, rewrite it as a clear, search-friendly query.
 3. If the message covers multiple topics, generate sub-queries.
+4. Optionally produce a search_query field with English/technical
+   keywords if you believe it will improve recall; otherwise leave
+   it equal to query.
 
 Reply as JSON:
-{"should_query": true|false, "query": "...", "sub_queries": ["...", "..."]}
+{"should_query": true|false, "query": "...", "search_query": "...", "sub_queries": ["...", "..."]}
 ```
 
 ### Cron isolation — deny by default
