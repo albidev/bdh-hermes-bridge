@@ -367,7 +367,7 @@ def test_rewrite_query_handles_should_query_false(monkeypatch):
     fake_response_body = json.dumps({
         "choices": [{
             "message": {
-                "content": '{"should_query": false, "query": "", "sub_queries": []}'
+                "content": '{"should_query": false, "query": "riavvia il gateway", "sub_queries": []}'
             }
         }]
     })
@@ -588,3 +588,200 @@ def test_post_api_skips_write_when_classification_false(monkeypatch):
         assistant_content_chars=300,
         assistant_message=type("Message", (), {"content": "x" * 300})(),
     )
+
+
+# ---------------------------------------------------------------------------
+# v0.6.0 — Multi-query variant normalization tests
+# ---------------------------------------------------------------------------
+
+def _fake_urlopen_for_content(monkeypatch, content_obj):
+    """Helper: patch urlopen so _rewrite_query sees `content_obj` as JSON."""
+    fake_response_body = json.dumps({
+        "choices": [{"message": {"content": json.dumps(content_obj)}}]
+    })
+
+    class FakeResp:
+        def __init__(self, body):
+            self._body = body.encode()
+        def read(self):
+            return self._body
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            pass
+
+    monkeypatch.setattr(bridge, "_REWRITE_API_KEY", "fake-key")
+    monkeypatch.setattr(
+        bridge.urllib.request,
+        "urlopen",
+        lambda req, timeout=None: FakeResp(fake_response_body),
+    )
+
+
+def test_normalize_query_variants_accepts_search_queries_array(monkeypatch):
+    """Provider-specific `search_queries` array is normalized to sub_queries."""
+    _fake_urlopen_for_content(monkeypatch, {
+        "should_query": True,
+        "query": "italian query",
+        "search_queries": ["english query", "keywords query"],
+    })
+    result = bridge._rewrite_query("senti ma...")
+    assert result is not None
+    assert result["query"] == "italian query"
+    assert result["search_query"] == "english query"
+    assert result["sub_queries"] == ["keywords query"]
+
+
+def test_normalize_query_variants_accepts_query_variants_alias(monkeypatch):
+    """Provider-specific `query_variants` alias is also accepted."""
+    _fake_urlopen_for_content(monkeypatch, {
+        "should_query": True,
+        "query": "italian query",
+        "query_variants": ["variant a", "variant b"],
+    })
+    result = bridge._rewrite_query("senti ma...")
+    assert result is not None
+    assert result["search_query"] == "variant a"
+    assert result["sub_queries"] == ["variant b"]
+
+
+def test_normalize_query_variants_preserves_legacy_search_query(monkeypatch):
+    """Legacy `search_query` string keeps working and is preferred as first variant."""
+    _fake_urlopen_for_content(monkeypatch, {
+        "should_query": True,
+        "query": "italian query",
+        "search_query": "legacy english query",
+        "sub_queries": ["sub one", "sub two"],
+    })
+    result = bridge._rewrite_query("senti ma...")
+    assert result is not None
+    assert result["search_query"] == "legacy english query"
+    assert result["sub_queries"] == ["sub one", "sub two"]
+
+
+def test_normalize_query_variants_merges_all_sources(monkeypatch):
+    """search_query + search_queries + query_variants + sub_queries all merge."""
+    _fake_urlopen_for_content(monkeypatch, {
+        "should_query": True,
+        "query": "q",
+        "search_query": "first",
+        "search_queries": ["second", "third"],
+        "query_variants": ["fourth"],
+        "sub_queries": ["fifth", "sixth"],
+    })
+    result = bridge._rewrite_query("msg")
+    assert result["search_query"] == "first"
+    assert result["sub_queries"] == ["second", "third", "fourth", "fifth", "sixth"]
+
+
+def test_normalize_query_variants_filters_empty_and_non_strings(monkeypatch):
+    """Empty strings, non-strings, and duplicates are filtered from variants."""
+    _fake_urlopen_for_content(monkeypatch, {
+        "should_query": True,
+        "query": "q",
+        "search_queries": ["", "   ", "valid", 123, None, "valid"],
+    })
+    result = bridge._rewrite_query("msg")
+    assert result["search_query"] == "valid"
+    assert result["sub_queries"] == []
+
+
+def test_normalize_query_variants_deduplicates_case_insensitively(monkeypatch):
+    """Case-insensitive duplicates are dropped while preserving order."""
+    _fake_urlopen_for_content(monkeypatch, {
+        "should_query": True,
+        "query": "q",
+        "search_query": "Hello World",
+        "search_queries": ["hello world", "HELLO WORLD", "other"],
+    })
+    result = bridge._rewrite_query("msg")
+    assert result["search_query"] == "Hello World"
+    assert result["sub_queries"] == ["other"]
+
+
+def test_normalize_query_variants_truncates_over_limit(monkeypatch):
+    """Variants beyond max_variants are dropped with a debug log."""
+    _fake_urlopen_for_content(monkeypatch, {
+        "should_query": True,
+        "query": "q",
+        "search_queries": [f"v{i}" for i in range(20)],
+    })
+    monkeypatch.setattr(bridge, "_REWRITE_MAX_VARIANTS", 5)
+    result = bridge._rewrite_query("msg")
+    assert result["search_query"] == "v0"
+    assert result["sub_queries"] == ["v1", "v2", "v3", "v4"]
+    assert all(v not in result["sub_queries"] for v in [f"v{i}" for i in range(5, 20)])
+
+
+def test_normalize_query_variants_falls_back_when_query_missing(monkeypatch):
+    """Malformed rewrite output (missing query) triggers full fallback."""
+    _fake_urlopen_for_content(monkeypatch, {
+        "should_query": True,
+        "search_queries": ["only search"],
+    })
+    result = bridge._rewrite_query("msg")
+    assert result is None
+
+
+def test_normalize_query_variants_falls_back_when_query_empty(monkeypatch):
+    """Empty query string triggers full fallback."""
+    _fake_urlopen_for_content(monkeypatch, {
+        "should_query": True,
+        "query": "   ",
+        "search_query": "english",
+    })
+    result = bridge._rewrite_query("msg")
+    assert result is None
+
+
+def test_pre_llm_uses_normalized_search_query_for_retrieval(monkeypatch):
+    """Read path uses the normalized search_query, not the raw provider array."""
+    captured = []
+
+    def fake_sync(query, **kwargs):
+        captured.append(query)
+        return {
+            "activated_notes": [{"id": "n1", "title": "Test", "score": 0.9}],
+            "routing": {"hybrid_top_score": 0.8, "vector_top_score": 0.7, "bm25_matched_term_count": 3},
+            "response": "ctx",
+        }
+
+    monkeypatch.setattr(bridge, "_QUERY_REWRITE_ENABLED", True)
+    monkeypatch.setattr(bridge, "_REWRITE_API_KEY", "fake-key")
+    monkeypatch.setattr(
+        bridge,
+        "_rewrite_query",
+        lambda msg, ctx="": {
+            "should_query": True,
+            "query": "rewritten technical query",
+            "search_query": "english technical query",
+            "sub_queries": ["related topic"],
+        },
+    )
+    monkeypatch.setattr(bridge, "_bdh_query_sync", fake_sync)
+    bridge._on_pre_llm_call(
+        session_id="s1",
+        user_message="senti ma pensavo ad una cosa sul bridge",
+    )
+    assert captured[0] == "english technical query\nrelated topic"
+
+
+def test_post_api_uses_original_query_for_write_with_variants(monkeypatch):
+    """Write path keeps the user-language query even when variants are normalized."""
+    captured = []
+
+    def fake_async(query, **kwargs):
+        captured.append(query)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    bridge._last_user_message = "senti ma pensavo ad una cosa sul bridge"
+    bridge._last_rewritten_query = "BDH bridge query rewrite pipeline"
+    bridge._last_should_query = True
+    bridge._on_post_api_request(
+        session_id="s1",
+        finish_reason="stop",
+        assistant_content_chars=300,
+        assistant_message=type("Message", (), {"content": "x" * 300})(),
+    )
+    assert captured[0] == "BDH bridge query rewrite pipeline"
+

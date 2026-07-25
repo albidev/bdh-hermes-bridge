@@ -8,7 +8,7 @@ Bidirectional plugin bridge between [Hermes Agent](https://github.com/NousResear
 
 The plugin connects Hermes' real conversations to BDH's neural knowledge graph and exposes BDH context as native Hermes tools. It learns from actual usage — not fabricated bridge queries.
 
-> **Status:** standalone Hermes plugin, version **0.5.0**.
+> **Status:** standalone Hermes plugin, version **0.6.0**.
 
 ## What it does
 
