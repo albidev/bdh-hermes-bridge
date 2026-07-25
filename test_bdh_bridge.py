@@ -335,7 +335,7 @@ def test_rewrite_query_parses_valid_json_response(monkeypatch):
     fake_response_body = json.dumps({
         "choices": [{
             "message": {
-                "content": '{"should_query": true, "query": "BDH bridge query rewrite pipeline", "sub_queries": ["LLM preprocessing", "context recovery"]}'
+                "content": '{"should_query": true, "query": "BDH bridge query rewrite pipeline", "search_query": "BDH bridge query rewrite pipeline", "sub_queries": ["LLM preprocessing", "context recovery"]}'
             }
         }]
     })
@@ -503,7 +503,7 @@ def test_pre_llm_with_rewrite_skip_when_classification_false(monkeypatch):
 
 
 def test_pre_llm_with_rewrite_uses_rewritten_query(monkeypatch):
-    """When LLM rewrites the query, BDH receives the rewritten version."""
+    """When LLM rewrites the query, BDH receives the search_query version."""
     captured = []
 
     def fake_sync(query, **kwargs):
@@ -519,7 +519,7 @@ def test_pre_llm_with_rewrite_uses_rewritten_query(monkeypatch):
     monkeypatch.setattr(
         bridge,
         "_rewrite_query",
-        lambda msg, ctx="": {"should_query": True, "query": "rewritten technical query", "sub_queries": []},
+        lambda msg, ctx="": {"should_query": True, "query": "rewritten technical query", "search_query": "english technical query", "sub_queries": []},
     )
     monkeypatch.setattr(bridge, "_bdh_query_sync", fake_sync)
     bridge._on_pre_llm_call(
@@ -527,7 +527,7 @@ def test_pre_llm_with_rewrite_uses_rewritten_query(monkeypatch):
         user_message="senti ma pensavo ad una cosa sul bridge",
         conversation_history=[{"role": "user", "content": "precedente"}],
     )
-    assert captured[0] == "rewritten technical query"
+    assert captured[0] == "english technical query"
 
 
 def test_pre_llm_falls_back_on_rewrite_failure(monkeypatch):
@@ -553,7 +553,7 @@ def test_pre_llm_falls_back_on_rewrite_failure(monkeypatch):
 
 
 def test_post_api_uses_rewritten_query_as_seed(monkeypatch):
-    """Write path uses the rewritten query when available."""
+    """Write path uses the user-language query (not search_query) when available."""
     captured = []
 
     def fake_async(query, **kwargs):

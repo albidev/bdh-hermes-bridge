@@ -79,10 +79,12 @@ _REWRITE_API_KEY = os.environ.get(
 )
 _REWRITE_HTTP_REFERER = os.environ.get("BDH_REWRITE_HTTP_REFERER", "")
 _REWRITE_APP_TITLE = os.environ.get("BDH_REWRITE_APP_TITLE", "BDH Hermes Bridge")
+_REWRITE_PROMPT_FILE = os.environ.get("BDH_REWRITE_PROMPT_FILE", "")
 _CONTEXT_MESSAGES_N = int(os.environ.get("BDH_CONTEXT_MESSAGES_N", "6"))
 _CONTEXT_MSG_MAX_CHARS = int(os.environ.get("BDH_CONTEXT_MSG_MAX_CHARS", "200"))
 
-_REWRITE_SYSTEM_PROMPT = (
+# Default rewrite prompt. Can be overridden via BDH_REWRITE_PROMPT_FILE.
+_DEFAULT_REWRITE_SYSTEM_PROMPT = (
     "You are a query router for a personal knowledge graph.\n"
     "The graph stores: concepts, decisions, architecture choices, "
     "project context, lessons learned, strategies, and factual "
@@ -94,11 +96,37 @@ _REWRITE_SYSTEM_PROMPT = (
     "concepts already in the graph? (decisions, explanations, facts, "
     "strategies, architecture, lessons — NOT commands, acks, "
     "diagnostics, or status)\n"
-    "2. If yes, rewrite it as a clear, search-friendly query.\n"
+    "2. If yes, rewrite it as a clear, search-friendly query preserving "
+    "the user's original language and intent.\n"
     "3. If the message covers multiple topics, generate sub-queries.\n"
+    "4. Optionally produce a search_query field with English/technical "
+    "keywords if you believe it will improve recall against an "
+    "English-heavy knowledge graph; otherwise leave it equal to query.\n"
     "Reply as JSON:\n"
-    '{"should_query": true|false, "query": "...", "sub_queries": ["...", "..."]}'
+    '{"should_query": true|false, "query": "...", "search_query": "...", "sub_queries": ["...", "..."]}'
 )
+
+
+def _load_rewrite_system_prompt():
+    """Load the rewrite system prompt.
+
+    Returns the prompt from BDH_REWRITE_PROMPT_FILE if it exists and is
+    non-empty; otherwise returns the embedded default. This keeps the bridge
+    agnostic: a user can adapt the prompt to their language/vault without
+    forking the code.
+    """
+    if _REWRITE_PROMPT_FILE:
+        path = Path(_REWRITE_PROMPT_FILE).expanduser()
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+        except OSError as e:
+            logger.warning(f"[bdh-bridge] could not read custom prompt file {path}: {e} — using default")
+    return _DEFAULT_REWRITE_SYSTEM_PROMPT
+
+
+_REWRITE_SYSTEM_PROMPT = _load_rewrite_system_prompt()
 
 
 def _is_prompt_blacklisted(message):
@@ -388,8 +416,9 @@ def _rewrite_query(user_message, context_text=""):
 
     Returns a dict with:
       - should_query: bool (whether BDH should be queried)
-      - query: str (rewritten query, or original if fallback)
-      - sub_queries: list[str] (additional queries if multi-topic)
+      - query: str (rewritten query in user's language, or original if fallback)
+      - search_query: str (optimized English/keyword query for BDH retrieval)
+      - sub_queries: list[str] (additional search queries if multi-topic)
 
     On any failure (timeout, parse error, network), returns None so the
     caller falls back to the mechanical gate + raw user message.
@@ -402,10 +431,13 @@ def _rewrite_query(user_message, context_text=""):
     if context_text:
         user_content += f"\n\nRecent context:\n{context_text}"
 
+    # Reload prompt each call so external edits take effect without restart.
+    system_prompt = _load_rewrite_system_prompt()
+
     payload = {
         "model": _REWRITE_MODEL,
         "messages": [
-            {"role": "system", "content": _REWRITE_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
         "temperature": 0.1,
@@ -444,6 +476,7 @@ def _rewrite_query(user_message, context_text=""):
 
         should_query = bool(result.get("should_query", True))
         query = result.get("query", "").strip() or user_message
+        search_query = result.get("search_query", "").strip() or query
         sub_queries = [
             sq.strip() for sq in result.get("sub_queries", [])
             if isinstance(sq, str) and sq.strip()
@@ -451,11 +484,13 @@ def _rewrite_query(user_message, context_text=""):
 
         logger.info(
             f"[bdh-bridge] rewrite: should_query={should_query}, "
-            f"query={query[:80]!r}, sub_queries={len(sub_queries)}"
+            f"query={query[:80]!r}, search_query={search_query[:80]!r}, "
+            f"sub_queries={len(sub_queries)}"
         )
         return {
             "should_query": should_query,
             "query": query,
+            "search_query": search_query,
             "sub_queries": sub_queries,
         }
 
@@ -469,6 +504,18 @@ def _rewrite_query(user_message, context_text=""):
     except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
         logger.debug(f"[bdh-bridge] rewrite LLM parse error: {e} — fallback to raw")
         return None
+
+
+def _merge_search_query(primary, sub_queries):
+    """Build a single BDH query from primary search_query + sub-queries.
+
+    We pass sub-queries to BDH separated by newlines so the vector/BM25
+    index can rank all candidates together. BDH treats each line as an
+    alternative phrasing, not as a boolean AND.
+    """
+    parts = [primary.strip()]
+    parts.extend(sq.strip() for sq in sub_queries)
+    return "\n".join(p for p in parts if p) or primary
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +555,7 @@ def _on_pre_llm_call(**kwargs):
             return None
 
         # ── Query rewrite pipeline ──────────────────────────────────────
+        bdh_search_query = msg[:1500]
         if _QUERY_REWRITE_ENABLED:
             # Extract context from conversation_history
             context_text = _extract_context(kwargs.get("conversation_history"))
@@ -523,22 +571,24 @@ def _on_pre_llm_call(**kwargs):
                     logger.info("[bdh-bridge] rewrite: LLM classified as non-knowledge — skip read+write")
                     return None
 
-                # Use the rewritten query for BDH retrieval
-                bdh_query = rewrite_result["query"][:1500]
+                # Use search_query (English/optimized) for BDH retrieval.
+                # Keep query (user-language) for the write path later.
+                bdh_search_query = _merge_search_query(
+                    rewrite_result["search_query"][:1500],
+                    rewrite_result.get("sub_queries", []),
+                )
             else:
                 # Fallback: LLM failed, use mechanical gate + raw message
                 if not _should_auto_retrieve(msg):
                     return None
-                bdh_query = msg[:1500]
         else:
             # Feature flag off: use mechanical gate + raw message (v0.4.0 behavior)
             if not _should_auto_retrieve(msg):
                 return None
-            bdh_query = msg[:1500]
 
         # ── BDH retrieval (read-only) ──────────────────────────────────
         result = _bdh_query_sync(
-            bdh_query,
+            bdh_search_query,
             source="automatic_retrieval",
             timeout=2,
             learn=False,
