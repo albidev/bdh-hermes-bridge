@@ -328,7 +328,7 @@ def _bdh_request(endpoint, data=None, timeout=10, retries=1, backoff_base=2.0,
 
 
 def _bdh_query_sync(query_text, user_prompt=None, source=None, timeout=30,
-                    learn=True, retries=2, vault_id=None):
+                    learn=True, retries=2, vault_id=None, query_variants=None):
     """Synchronous query to BDH.
 
     ``learn=False`` is used by automatic pre-LLM retrieval: it must provide
@@ -347,6 +347,8 @@ def _bdh_query_sync(query_text, user_prompt=None, source=None, timeout=30,
         payload["user_prompt"] = user_prompt
     if source:
         payload["source"] = source
+    if query_variants:
+        payload["query_variants"] = query_variants
     return _bdh_request("/api/query", payload, timeout=timeout, retries=retries,
                         retry_on_timeout=False)
 
@@ -653,6 +655,7 @@ def _on_pre_llm_call(**kwargs):
 
         # ── Query rewrite pipeline ──────────────────────────────────────
         bdh_search_query = msg[:1500]
+        bdh_query_variants = None
         if _QUERY_REWRITE_ENABLED:
             # Extract context from conversation_history
             context_text = _extract_context(kwargs.get("conversation_history"))
@@ -668,11 +671,18 @@ def _on_pre_llm_call(**kwargs):
                     logger.info("[bdh-bridge] rewrite: LLM classified as non-knowledge — skip read+write")
                     return None
 
-                # Use search_query (English/optimized) for BDH retrieval.
-                # Keep query (user-language) for the write path later.
-                bdh_search_query = _merge_search_query(
-                    rewrite_result["search_query"][:1500],
-                    rewrite_result.get("sub_queries", []),
+                # Keep the rewritten user-language query as the canonical seed.
+                # Send translated/sub-query outputs as independent structured
+                # variants so BDH can fuse results instead of receiving keyword soup.
+                bdh_search_query = rewrite_result["query"][:1500]
+                bdh_query_variants = [
+                    {"query": rewrite_result["search_query"][:1500],
+                     "language": "rewrite", "weight": 1.0}
+                ]
+                bdh_query_variants.extend(
+                    {"query": variant[:1500], "language": "rewrite", "weight": 1.0}
+                    for variant in rewrite_result.get("sub_queries", [])
+                    if isinstance(variant, str) and variant.strip()
                 )
             else:
                 # Fallback: LLM failed, use mechanical gate + raw message
@@ -690,6 +700,7 @@ def _on_pre_llm_call(**kwargs):
             timeout=2,
             learn=False,
             retries=1,
+            query_variants=bdh_query_variants,
         )
         context = _format_bdh_context(result) if _has_relevant_bdh_context(result) else ""
         if context:
