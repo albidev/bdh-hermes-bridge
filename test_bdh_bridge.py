@@ -149,6 +149,17 @@ def test_pre_llm_returns_ephemeral_context_for_eligible_message(monkeypatch):
             "response": "The gateway recovery used SQLite recovery.",
         }
 
+    monkeypatch.setattr(bridge, "_QUERY_REWRITE_ENABLED", True)
+    monkeypatch.setattr(
+        bridge,
+        "_rewrite_query",
+        lambda msg, ctx="": {
+            "should_query": True,
+            "query": msg,
+            "search_query": "gateway recovery",
+            "sub_queries": ["gateway bug resolution"],
+        },
+    )
     monkeypatch.setattr(bridge, "_bdh_query_sync", fake_query)
     result = bridge._on_pre_llm_call(
         session_id="session-1",
