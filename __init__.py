@@ -4,6 +4,15 @@ BDH Bridge — Bidirectional Hermes ↔ BDH Graph Harness integration.
 Write path: feeds session content to BDH after each API response.
 Read path: provides bdh_query and bdh_stats tools.
 
+v0.6.0:
+  - Language-agnostic multi-query retrieval bridge normalization (#19)
+  - Optional provider-specific arrays `search_queries`/`query_variants` are
+    normalized into a provider-neutral `sub_queries` list
+  - Original `query` is always preserved for the write path
+  - Legacy single `search_query` field still works unchanged
+  - Validates variants for emptiness, duplicates, and a configurable max limit
+  - Invalid rewrite output still falls back to mechanical gate + raw message
+
 v0.5.0:
   - LLM-based query classification + rewrite before BDH retrieval
   - Semantic gate replaces mechanical eligibility check (knowledge vs operational noise)
@@ -79,10 +88,16 @@ _REWRITE_API_KEY = os.environ.get(
 )
 _REWRITE_HTTP_REFERER = os.environ.get("BDH_REWRITE_HTTP_REFERER", "")
 _REWRITE_APP_TITLE = os.environ.get("BDH_REWRITE_APP_TITLE", "BDH Hermes Bridge")
+_REWRITE_PROMPT_FILE = os.environ.get("BDH_REWRITE_PROMPT_FILE", "")
 _CONTEXT_MESSAGES_N = int(os.environ.get("BDH_CONTEXT_MESSAGES_N", "6"))
 _CONTEXT_MSG_MAX_CHARS = int(os.environ.get("BDH_CONTEXT_MSG_MAX_CHARS", "200"))
+# Max number of search/query variants accepted from an LLM rewrite. Extras are
+# dropped; duplicates/empty strings are filtered out. This keeps the bridge
+# provider-agnostic regardless of how an LLM names the array.
+_REWRITE_MAX_VARIANTS = int(os.environ.get("BDH_REWRITE_MAX_VARIANTS", "10"))
 
-_REWRITE_SYSTEM_PROMPT = (
+# Default rewrite prompt. Can be overridden via BDH_REWRITE_PROMPT_FILE.
+_DEFAULT_REWRITE_SYSTEM_PROMPT = (
     "You are a query router for a personal knowledge graph.\n"
     "The graph stores: concepts, decisions, architecture choices, "
     "project context, lessons learned, strategies, and factual "
@@ -94,11 +109,119 @@ _REWRITE_SYSTEM_PROMPT = (
     "concepts already in the graph? (decisions, explanations, facts, "
     "strategies, architecture, lessons — NOT commands, acks, "
     "diagnostics, or status)\n"
-    "2. If yes, rewrite it as a clear, search-friendly query.\n"
+    "2. If yes, rewrite it as a clear, search-friendly query preserving "
+    "the user's original language and intent.\n"
     "3. If the message covers multiple topics, generate sub-queries.\n"
+    "4. Optionally produce a search_query field with English/technical "
+    "keywords if you believe it will improve recall against an "
+    "English-heavy knowledge graph; otherwise leave it equal to query.\n"
     "Reply as JSON:\n"
-    '{"should_query": true|false, "query": "...", "sub_queries": ["...", "..."]}'
+    '{"should_query": true|false, "query": "...", "search_query": "...", "sub_queries": ["...", "..."]}'
 )
+
+
+def _normalize_query_variants(result, user_message, max_variants=_REWRITE_MAX_VARIANTS):
+    """Normalize optional provider-specific variant fields into a clean list.
+
+    Some rewrite providers return `search_queries` or `query_variants` instead
+    of (or alongside) the legacy `search_query` and `sub_queries` fields. This
+    function coalesces all of them into a provider-neutral list of non-empty,
+    deduplicated, bounded variant strings.
+
+    Behavior:
+      - If `search_query` is present and non-empty, it is treated as the
+        first variant (legacy behavior preserved).
+      - `search_queries` and `query_variants` arrays are appended if they are
+        iterable strings.
+      - `sub_queries` are appended as before.
+      - Empty/whitespace-only strings, non-string entries, and duplicates are
+        removed.
+      - The list is truncated to `max_variants`.
+      - The original `query` field is NEVER modified so the write path can keep
+        using the user's real intent.
+
+    Returns a dict with the same keys as the input plus normalized
+    `search_query` (first variant) and `sub_queries` (remaining variants).
+    On malformed input (e.g. `query` missing/empty, non-dict result), returns
+    None so the caller falls back to the raw message.
+    """
+    if not isinstance(result, dict):
+        return None
+
+    original_query = result.get("query", "").strip()
+    if not original_query:
+        return None
+
+    variants = []
+
+    # Legacy single-string field must keep working exactly as before.
+    legacy_search_query = result.get("search_query", "").strip()
+    if legacy_search_query:
+        variants.append(legacy_search_query)
+
+    # Provider-specific arrays — accept either naming convention.
+    for key in ("search_queries", "query_variants"):
+        raw = result.get(key)
+        if not isinstance(raw, (list, tuple)):
+            continue
+        for item in raw:
+            if isinstance(item, str):
+                item = item.strip()
+                if item:
+                    variants.append(item)
+
+    # Legacy sub_queries already existed; keep them in the same stream.
+    raw_subs = result.get("sub_queries", [])
+    if isinstance(raw_subs, (list, tuple)):
+        for item in raw_subs:
+            if isinstance(item, str):
+                item = item.strip()
+                if item:
+                    variants.append(item)
+
+    # Deduplicate while preserving order, then bound the count.
+    seen = set()
+    deduped = []
+    for v in variants:
+        folded = v.casefold()
+        if folded not in seen:
+            seen.add(folded)
+            deduped.append(v)
+    if len(deduped) > max_variants:
+        logger.debug(f"[bdh-bridge] variants truncated from {len(deduped)} to {max_variants}")
+        deduped = deduped[:max_variants]
+
+    search_query = deduped[0] if deduped else original_query
+    sub_queries = deduped[1:] if len(deduped) > 1 else []
+
+    return {
+        "should_query": bool(result.get("should_query", True)),
+        "query": original_query,
+        "search_query": search_query,
+        "sub_queries": sub_queries,
+    }
+
+
+def _load_rewrite_system_prompt():
+    """Load the rewrite system prompt.
+
+    Returns the prompt from BDH_REWRITE_PROMPT_FILE if it exists and is
+    non-empty; otherwise returns the embedded default. This keeps the bridge
+    agnostic: a user can adapt the prompt to their language/vault without
+    forking the code.
+    """
+    if _REWRITE_PROMPT_FILE:
+        path = Path(_REWRITE_PROMPT_FILE).expanduser()
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+            if text:
+                return text
+        except OSError as e:
+            logger.warning(f"[bdh-bridge] could not read custom prompt file {path}: {e} — using default")
+    return _DEFAULT_REWRITE_SYSTEM_PROMPT
+
+
+_REWRITE_SYSTEM_PROMPT = _load_rewrite_system_prompt()
 
 
 def _is_prompt_blacklisted(message):
@@ -205,7 +328,7 @@ def _bdh_request(endpoint, data=None, timeout=10, retries=1, backoff_base=2.0,
 
 
 def _bdh_query_sync(query_text, user_prompt=None, source=None, timeout=30,
-                    learn=True, retries=2, vault_id=None):
+                    learn=True, retries=2, vault_id=None, query_variants=None):
     """Synchronous query to BDH.
 
     ``learn=False`` is used by automatic pre-LLM retrieval: it must provide
@@ -224,6 +347,8 @@ def _bdh_query_sync(query_text, user_prompt=None, source=None, timeout=30,
         payload["user_prompt"] = user_prompt
     if source:
         payload["source"] = source
+    if query_variants:
+        payload["query_variants"] = query_variants
     return _bdh_request("/api/query", payload, timeout=timeout, retries=retries,
                         retry_on_timeout=False)
 
@@ -375,24 +500,44 @@ def _extract_context(conversation_history, n=_CONTEXT_MESSAGES_N,
             )
         elif not isinstance(content, str):
             content = str(content)
-        content = content.strip()
-        if not content:
+        if not content.strip():
             continue
-        lines.append(f"[{role}] {content[:max_chars]}")
+        # Truncate long messages
+        snippet = content[:max_chars]
+        lines.append(f"[{role}] {snippet}")
 
     return "\n".join(lines)
+
+
+def _merge_search_query(primary, sub_queries):
+    """Build a single BDH query from primary search_query + sub-queries.
+
+    We pass sub-queries to BDH separated by newlines so the vector/BM25
+    index can rank all candidates together. BDH treats each line as an
+    alternative phrasing, not as a boolean AND.
+    """
+    parts = [primary.strip()]
+    parts.extend(sq.strip() for sq in sub_queries)
+    return "\n".join(p for p in parts if p) or primary
 
 
 def _rewrite_query(user_message, context_text=""):
     """Call the rewrite LLM to classify + rewrite the user message.
 
-    Returns a dict with:
+    Returns a normalized dict with:
       - should_query: bool (whether BDH should be queried)
-      - query: str (rewritten query, or original if fallback)
-      - sub_queries: list[str] (additional queries if multi-topic)
+      - query: str (rewritten query in user's language, or original if fallback)
+      - search_query: str (optimized English/keyword query for BDH retrieval)
+      - sub_queries: list[str] (additional search queries if multi-topic)
 
-    On any failure (timeout, parse error, network), returns None so the
-    caller falls back to the mechanical gate + raw user message.
+    The raw LLM output is normalized through `_normalize_query_variants` so
+    provider-specific fields (`search_queries`, `query_variants`) are accepted
+    alongside the legacy `search_query`/`sub_queries` fields. The original
+    `query` is preserved unchanged for the write path.
+
+    On any failure (timeout, parse error, network, or malformed normalized
+    output), returns None so the caller falls back to the mechanical gate + raw
+    user message.
     """
     if not _REWRITE_API_KEY:
         logger.debug("[bdh-bridge] rewrite skipped — no OLLAMA_API_KEY set")
@@ -402,10 +547,13 @@ def _rewrite_query(user_message, context_text=""):
     if context_text:
         user_content += f"\n\nRecent context:\n{context_text}"
 
+    # Reload prompt each call so external edits take effect without restart.
+    system_prompt = _load_rewrite_system_prompt()
+
     payload = {
         "model": _REWRITE_MODEL,
         "messages": [
-            {"role": "system", "content": _REWRITE_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
         ],
         "temperature": 0.1,
@@ -440,24 +588,22 @@ def _rewrite_query(user_message, context_text=""):
             content = re.sub(r"^```(?:json)?\s*", "", content)
             content = re.sub(r"\s*```$", "", content)
 
-        result = json.loads(content)
+        raw_result = json.loads(content)
 
-        should_query = bool(result.get("should_query", True))
-        query = result.get("query", "").strip() or user_message
-        sub_queries = [
-            sq.strip() for sq in result.get("sub_queries", [])
-            if isinstance(sq, str) and sq.strip()
-        ]
+        # Normalize optional provider-specific variant fields. If the result is
+        # malformed (missing query, etc.), treat it as a rewrite failure and fall
+        # back to the mechanical gate + raw message.
+        result = _normalize_query_variants(raw_result, user_message, max_variants=_REWRITE_MAX_VARIANTS)
+        if result is None:
+            logger.debug("[bdh-bridge] rewrite output normalization failed — fallback to raw")
+            return None
 
         logger.info(
-            f"[bdh-bridge] rewrite: should_query={should_query}, "
-            f"query={query[:80]!r}, sub_queries={len(sub_queries)}"
+            f"[bdh-bridge] rewrite: should_query={result['should_query']}, "
+            f"query={result['query'][:80]!r}, search_query={result['search_query'][:80]!r}, "
+            f"sub_queries={len(result['sub_queries'])}"
         )
-        return {
-            "should_query": should_query,
-            "query": query,
-            "sub_queries": sub_queries,
-        }
+        return result
 
     except (URLError, OSError) as e:
         reason = getattr(e, 'reason', '')
@@ -508,6 +654,8 @@ def _on_pre_llm_call(**kwargs):
             return None
 
         # ── Query rewrite pipeline ──────────────────────────────────────
+        bdh_search_query = msg[:1500]
+        bdh_query_variants = None
         if _QUERY_REWRITE_ENABLED:
             # Extract context from conversation_history
             context_text = _extract_context(kwargs.get("conversation_history"))
@@ -523,26 +671,36 @@ def _on_pre_llm_call(**kwargs):
                     logger.info("[bdh-bridge] rewrite: LLM classified as non-knowledge — skip read+write")
                     return None
 
-                # Use the rewritten query for BDH retrieval
-                bdh_query = rewrite_result["query"][:1500]
+                # Keep the rewritten user-language query as the canonical seed.
+                # Send translated/sub-query outputs as independent structured
+                # variants so BDH can fuse results instead of receiving keyword soup.
+                bdh_search_query = rewrite_result["query"][:1500]
+                bdh_query_variants = [
+                    {"query": rewrite_result["search_query"][:1500],
+                     "language": "rewrite", "weight": 1.0}
+                ]
+                bdh_query_variants.extend(
+                    {"query": variant[:1500], "language": "rewrite", "weight": 1.0}
+                    for variant in rewrite_result.get("sub_queries", [])
+                    if isinstance(variant, str) and variant.strip()
+                )
             else:
                 # Fallback: LLM failed, use mechanical gate + raw message
                 if not _should_auto_retrieve(msg):
                     return None
-                bdh_query = msg[:1500]
         else:
             # Feature flag off: use mechanical gate + raw message (v0.4.0 behavior)
             if not _should_auto_retrieve(msg):
                 return None
-            bdh_query = msg[:1500]
 
         # ── BDH retrieval (read-only) ──────────────────────────────────
         result = _bdh_query_sync(
-            bdh_query,
+            bdh_search_query,
             source="automatic_retrieval",
             timeout=2,
             learn=False,
             retries=1,
+            query_variants=bdh_query_variants,
         )
         context = _format_bdh_context(result) if _has_relevant_bdh_context(result) else ""
         if context:
@@ -553,38 +711,26 @@ def _on_pre_llm_call(**kwargs):
         logger.debug(f"[bdh-bridge] pre_llm_call error: {e}")
     return None
 
+
 # ---------------------------------------------------------------------------
 # Hook: post_api_request — feed BDH after each final response
 # ---------------------------------------------------------------------------
 
 def _on_post_api_request(**kwargs):
-    """After the LLM finishes a response, query BDH with the assistant content.
+    """Asynchronously feed the user message + assistant response to BDH.
 
-    Only fires on final responses (finish_reason == "stop") and only when
-    the response is substantial enough to be worth querying.
-
-    Sends source="assistant_response" so BDH can dampen Hebbian learning
-    and prevent echo-loop reinforcement.
-
-    Anti-echo-loop: if no user message was captured (pre_llm_call didn't fire),
-    SKIP the write entirely — embedding the assistant response alone would
-    reinforce existing connections rather than discovering new ones.
+    The write path uses the original rewritten query (user-language) as the
+    embedding seed, not the optimized search_query, so the vault learns from
+    real user language rather than translated/keyword artifacts.
     """
+    global _last_user_message, _last_rewritten_query, _last_should_query
     try:
         finish_reason = kwargs.get("finish_reason", "")
-        if finish_reason != "stop":
+        if finish_reason not in ("stop", "length"):
             return
-
-        if _is_cron_source(kwargs.get("platform"), kwargs.get("source")) and not _cron_has_bdh_opt_in(_last_user_message):
-            logger.info("[bdh-bridge] write skipped — cron source is deny-by-default")
-            return
-
-        content_chars = kwargs.get("assistant_content_chars", 0) or 0
-        if content_chars < 200:
-            return  # skip trivial responses ("done", "ok", "pushato")
 
         assistant_msg = kwargs.get("assistant_message")
-        if not assistant_msg:
+        if assistant_msg is None:
             return
 
         # Handle both string content and list-of-blocks content (Anthropic format)
@@ -615,6 +761,13 @@ def _on_post_api_request(**kwargs):
             logger.info("[bdh-bridge] write skipped — prompt is blacklisted")
             return
 
+        # v0.6.0: cron deny-by-default is enforced at both read and write. Without
+        # an explicit opt-in, the write path must be skipped regardless of any
+        # previous turn state. This protects the vault from scheduled-agent noise.
+        if _is_cron_source(kwargs.get("platform"), kwargs.get("source")) and not _cron_has_bdh_opt_in(_last_user_message):
+            logger.info("[bdh-bridge] write skipped — cron source is deny-by-default")
+            return
+
         # v0.5.0: if classification said should_query=false, skip the write too.
         # This prevents operational noise from polluting the vault via the
         # write path even when the read path was already skipped.
@@ -625,6 +778,8 @@ def _on_post_api_request(**kwargs):
         # Use the USER MESSAGE as the embedding seed (query) — that's the signal.
         # The assistant response is passed as user_prompt for LLM/neurogenesis context.
         # v0.5.0: prefer the rewritten query for read/write consistency.
+        # v0.6.0: _normalize_query_variants guarantees `query` is always the
+        # user-language/intent field, so the write path stays provider-neutral.
         query = (_last_rewritten_query or _last_user_message)[:1500]
         user_prompt = text[:1500]
 
@@ -730,100 +885,74 @@ def _tool_bdh_query(args, **kwargs):
 
 
 # ---------------------------------------------------------------------------
-# Tool: bdh_stats — quick graph stats
+# Tool: bdh_stats — graph statistics
 # ---------------------------------------------------------------------------
 
 def _tool_bdh_stats(args, **kwargs):
-    """Get current BDH graph statistics.
+    """Return BDH graph statistics for a vault.
+
+    Args:
+        vault_id: Optional vault identifier. Uses BDH default if omitted.
 
     Returns:
-        JSON with neuron count, active/dormant, synapses, hebbian, avg_degree.
+        JSON with neuron_count, active_count, dormant_count, synapse_count,
+        hebbian_count, average_degree.
     """
     try:
-        vault_id = args.get("vault_id") if isinstance(args, dict) else None
+        vault_id = args.get("vault_id", "")
         endpoint = "/api/stats"
         if vault_id:
-            endpoint += "?vault_id=" + urllib.parse.quote(vault_id, safe="")
-        result = _bdh_request(endpoint, timeout=5, retries=1)
+            endpoint += f"?{urllib.parse.urlencode({'vault_id': vault_id}, quote_via=urllib.parse.quote)}"
+
+        result = _bdh_request(endpoint, timeout=10, retries=2)
         if result is None:
-            return json.dumps({"error": "BDH server unreachable"})
-        return json.dumps({
-            "neurons": result.get("neurons", 0),
-            "active_neurons": result.get("active_neurons", 0),
-            "dormant_neurons": result.get("dormant_neurons", 0),
-            "synapses": result.get("synapses", 0),
-            "hebbian_synapses": result.get("hebbian_synapses", 0),
-            "avg_degree": round(result.get("avg_degree", 0), 2),
-            "queries_processed": result.get("queries_processed", 0),
-        })
+            return json.dumps({
+                "error": "BDH server unreachable — possibly in consolidation."
+            })
+
+        output = {
+            "neuron_count": result.get("neuron_count", 0),
+            "active_count": result.get("active_count", 0),
+            "dormant_count": result.get("dormant_count", 0),
+            "synapse_count": result.get("synapse_count", 0),
+            "hebbian_count": result.get("hebbian_count", 0),
+            "average_degree": result.get("average_degree", 0.0),
+        }
+        return json.dumps(output, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"error": f"bdh_stats tool error: {e}"})
 
 
 # ---------------------------------------------------------------------------
-# Plugin registration
+# Hermes plugin entry point
 # ---------------------------------------------------------------------------
 
-def register(ctx) -> None:
-    """Register hooks and tools with the Hermes plugin context."""
-    # Hook: capture user message before LLM call
-    ctx.register_hook("pre_llm_call", _on_pre_llm_call)
+# Minimal plugin metadata returned for Hermes introspection.
+PLUGIN = {
+    "name": "bdh-bridge",
+    "version": "0.6.0",
+    "description": "Bidirectional Hermes ↔ BDH Graph Harness bridge with query rewrite and normalization.",
+}
 
-    # Hook: feed BDH after each API response
-    ctx.register_hook("post_api_request", _on_post_api_request)
 
-    # Temporary debug marker: show when the model actually used bdh_query.
-    ctx.register_hook("post_tool_call", _on_post_tool_call)
-    ctx.register_hook("transform_llm_output", _on_transform_llm_output)
+def register(app):
+    """Register hooks and tools with Hermes.
 
-    # Tools: query BDH and get stats
-    ctx.register_tool(
+    Args:
+        app: Hermes plugin registrar exposing register_hook and register_tool.
+    """
+    app.register_hook("pre_llm_call", _on_pre_llm_call)
+    app.register_hook("post_api_request", _on_post_api_request)
+    app.register_hook("post_tool_call", _on_post_tool_call)
+    app.register_hook("transform_llm_output", _on_transform_llm_output)
+
+    app.register_tool(
         "bdh_query",
-        "bdh",
-        {
-            "name": "bdh_query",
-            "description": "Query the BDH knowledge graph. Returns activated neurons, "
-                           "LLM response, and any new concepts created via neurogenesis. "
-                           "Use when you need context from the BDH graph about a topic.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The question or topic to search for in the knowledge graph."
-                    },
-                    "vault_id": {
-                        "type": "string",
-                        "description": "Optional vault ID. Omit to use BDH's configured default vault."
-                    }
-                },
-                "required": ["query"]
-            }
-        },
         _tool_bdh_query,
+        description="Query the BDH knowledge graph for context.",
     )
-    ctx.register_tool(
+    app.register_tool(
         "bdh_stats",
-        "bdh",
-        {
-            "name": "bdh_stats",
-            "description": "Get current BDH graph statistics: neuron count, active/dormant, "
-                           "synapses, hebbian links, average degree.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "vault_id": {
-                        "type": "string",
-                        "description": "Optional vault ID. Omit to use BDH's configured default vault."
-                    }
-                }
-            }
-        },
         _tool_bdh_stats,
-    )
-
-    logger.info(
-        "[bdh-bridge] registered: hooks=[pre_llm_call, post_api_request, "
-        "post_tool_call, transform_llm_output], "
-        f"tools=[bdh_query, bdh_stats], api={BDH_API}"
+        description="Return BDH graph statistics for a vault.",
     )
