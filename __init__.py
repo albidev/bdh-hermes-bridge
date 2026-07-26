@@ -429,6 +429,21 @@ def _format_bdh_context(result):
             score = note.get("score")
             suffix = f" (score: {score})" if score is not None else ""
             lines.append(f"- {title}{suffix}")
+
+    variants = (result.get("routing") or {}).get("query_variants") or []
+    rendered_variants = 0
+    for variant in variants:
+        if rendered_variants >= 3 or not isinstance(variant, dict):
+            continue
+        query = variant.get("query")
+        if not isinstance(query, str) or not query.strip():
+            continue
+        if rendered_variants == 0:
+            lines.extend(["", "Query variants (retrieval only):"])
+        language = str(variant.get("language") or "unknown").replace("\n", " ")[:24]
+        query = " ".join(query.split())[:240]
+        lines.append(f"- [{language}] {query}")
+        rendered_variants += 1
     if synthesis:
         lines.extend(["", "Relevant graph synthesis:", synthesis[:4000]])
     lines.extend([
