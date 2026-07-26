@@ -178,6 +178,26 @@ def test_pre_llm_returns_ephemeral_context_for_eligible_message(monkeypatch):
     assert "Use this as supporting context." in result["context"]
 
 
+def test_context_exposes_capped_query_variants_as_retrieval_only():
+    context = bridge._format_bdh_context({
+        "activated_notes": [{"id": "n1", "title": "Gateway recovery", "score": 0.91}],
+        "routing": {
+            "query_variants": [
+                {"query": "recupero gateway", "language": "it"},
+                {"query": "gateway recovery", "language": "en"},
+                {"query": "database recovery path", "language": "rewrite"},
+                {"query": "must not be shown", "language": "rewrite"},
+            ],
+        },
+    })
+
+    assert "Query variants (retrieval only):" in context
+    assert "- [it] recupero gateway" in context
+    assert "- [en] gateway recovery" in context
+    assert "- [rewrite] database recovery path" in context
+    assert "must not be shown" not in context
+
+
 def test_hybrid_routing_requires_lexical_or_strong_vector_signal():
     assert bridge._has_relevant_bdh_context({
         "routing": {
