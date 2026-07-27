@@ -304,6 +304,23 @@ def test_tool_query_passes_explicit_vault(monkeypatch):
     assert captured["kwargs"]["vault_id"] == "research"
 
 
+def test_register_uses_current_plugin_tool_contract():
+    calls = []
+
+    class FakeApp:
+        def register_hook(self, name, fn):
+            pass
+
+        def register_tool(self, **kwargs):
+            calls.append(kwargs)
+
+    bridge.register(FakeApp())
+    assert [call["name"] for call in calls] == ["bdh_query", "bdh_stats"]
+    assert all(call["toolset"] == "bdh" for call in calls)
+    assert all(call["schema"]["parameters"]["type"] == "object" for call in calls)
+    assert calls[0]["schema"]["parameters"]["required"] == ["query"]
+
+
 def test_stats_omits_default_vault_and_encodes_explicit_id(monkeypatch):
     endpoints = []
 

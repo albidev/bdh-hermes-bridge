@@ -961,6 +961,40 @@ def _tool_bdh_stats(args, **kwargs):
 # Hermes plugin entry point
 # ---------------------------------------------------------------------------
 
+_BDH_QUERY_SCHEMA = {
+    "name": "bdh_query",
+    "description": "Query the BDH knowledge graph for relevant context.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Question or topic to search in the BDH graph.",
+            },
+            "vault_id": {
+                "type": "string",
+                "description": "Optional BDH vault identifier.",
+            },
+        },
+        "required": ["query"],
+    },
+}
+
+_BDH_STATS_SCHEMA = {
+    "name": "bdh_stats",
+    "description": "Return current BDH graph statistics for a vault.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "vault_id": {
+                "type": "string",
+                "description": "Optional BDH vault identifier.",
+            },
+        },
+        "required": [],
+    },
+}
+
 # Minimal plugin metadata returned for Hermes introspection.
 PLUGIN = {
     "name": "bdh-bridge",
@@ -981,12 +1015,16 @@ def register(app):
     app.register_hook("transform_llm_output", _on_transform_llm_output)
 
     app.register_tool(
-        "bdh_query",
-        _tool_bdh_query,
+        name="bdh_query",
+        toolset="bdh",
+        schema=_BDH_QUERY_SCHEMA,
+        handler=_tool_bdh_query,
         description="Query the BDH knowledge graph for context.",
     )
     app.register_tool(
-        "bdh_stats",
-        _tool_bdh_stats,
+        name="bdh_stats",
+        toolset="bdh",
+        schema=_BDH_STATS_SCHEMA,
+        handler=_tool_bdh_stats,
         description="Return BDH graph statistics for a vault.",
     )
