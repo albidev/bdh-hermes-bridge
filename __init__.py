@@ -224,6 +224,22 @@ def _load_rewrite_system_prompt():
 _REWRITE_SYSTEM_PROMPT = _load_rewrite_system_prompt()
 
 
+def _current_rewrite_api_key():
+    """Resolve the rewrite credential at call time, not only at import time.
+
+    The gateway is launched by launchd and plugin discovery/import order can
+    precede the final .env load.  Reading the module-level value only once
+    makes the bridge permanently believe rewrite is disabled for that process.
+    Prefer the dedicated bridge credential, then the shared Ollama credential,
+    while retaining the import-time value for backwards compatibility/tests.
+    """
+    return (
+        os.environ.get("BDH_REWRITE_API_KEY", "").strip()
+        or os.environ.get("OLLAMA_API_KEY", "").strip()
+        or _REWRITE_API_KEY.strip()
+    )
+
+
 def _is_prompt_blacklisted(message):
     """Return True when a prompt is operational/meta text excluded from BDH.
 
@@ -554,8 +570,11 @@ def _rewrite_query(user_message, context_text=""):
     output), returns None so the caller falls back to the mechanical gate + raw
     user message.
     """
-    if not _REWRITE_API_KEY:
-        logger.debug("[bdh-bridge] rewrite skipped — no OLLAMA_API_KEY set")
+    rewrite_api_key = _current_rewrite_api_key()
+    if not rewrite_api_key:
+        logger.warning(
+            "[bdh-bridge] rewrite skipped — BDH_REWRITE_API_KEY/OLLAMA_API_KEY unavailable"
+        )
         return None
 
     user_content = f"User message:\n{user_message[:1500]}"
@@ -581,7 +600,7 @@ def _rewrite_query(user_message, context_text=""):
     body = json.dumps(payload).encode()
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {_REWRITE_API_KEY}",
+        "Authorization": f"Bearer {rewrite_api_key}",
     }
     if _REWRITE_HTTP_REFERER:
         headers["HTTP-Referer"] = _REWRITE_HTTP_REFERER

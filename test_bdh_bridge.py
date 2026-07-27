@@ -357,8 +357,17 @@ def test_extract_context_truncates_long_messages():
 
 def test_rewrite_query_returns_none_without_api_key(monkeypatch):
     monkeypatch.setattr(bridge, "_REWRITE_API_KEY", "")
+    monkeypatch.delenv("BDH_REWRITE_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     result = bridge._rewrite_query("test message")
     assert result is None
+
+
+def test_rewrite_query_resolves_key_after_module_import(monkeypatch):
+    """launchd/.env loading may happen after plugin module import."""
+    monkeypatch.setattr(bridge, "_REWRITE_API_KEY", "")
+    monkeypatch.setenv("BDH_REWRITE_API_KEY", "runtime-key")
+    assert bridge._current_rewrite_api_key() == "runtime-key"
 
 
 def test_rewrite_query_parses_valid_json_response(monkeypatch):
