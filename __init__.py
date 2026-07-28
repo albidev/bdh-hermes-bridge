@@ -56,9 +56,13 @@ BDH_API = os.environ.get("BDH_API_URL", "http://localhost:8643")
 # State: capture user message from pre_llm_call for write path
 # ---------------------------------------------------------------------------
 
-_last_user_message = ""
-_last_rewritten_query = ""       # rewritten query from classification (write path consistency)
-_last_should_query = None       # classification result (None = no classification done)
+_TURN_STATE_TTL_SECONDS = min(
+    max(int(os.environ.get("BDH_TURN_STATE_TTL_SECONDS", "300")), 1), 300
+)
+_TURN_STATE_MAX_ENTRIES = max(
+    int(os.environ.get("BDH_TURN_STATE_MAX_ENTRIES", "1000")), 1
+)
+_turn_states = {}
 _bdh_used_sessions = set()
 _bdh_state_lock = threading.Lock()
 _AUTO_RETRIEVAL_MIN_SCORE = 0.30
@@ -285,6 +289,72 @@ def _cron_has_bdh_opt_in(message):
 def _turn_key(kwargs):
     """Return the stable key shared by tool and output hooks for this turn."""
     return kwargs.get("session_id") or kwargs.get("task_id")
+
+
+def _turn_state_key(kwargs):
+    """Return a turn-aware state key, falling back to the session identifier."""
+    session_key = _turn_key(kwargs)
+    if session_key is None:
+        return None
+    turn_id = kwargs.get("turn_id")
+    if turn_id is not None:
+        return str(session_key), str(turn_id)
+    return str(session_key)
+
+
+def _cleanup_turn_states_locked(now):
+    """Evict expired state and oldest overflow entries while holding the lock."""
+    expired = [
+        key for key, state in _turn_states.items()
+        if now - state["created_at"] >= _TURN_STATE_TTL_SECONDS
+    ]
+    for key in expired:
+        _turn_states.pop(key, None)
+
+    overflow = len(_turn_states) - _TURN_STATE_MAX_ENTRIES
+    if overflow > 0:
+        for key in list(_turn_states)[:overflow]:
+            _turn_states.pop(key, None)
+
+
+def _remember_turn_state(kwargs, user_message):
+    """Store per-turn write state before pre-hook gating can return early."""
+    key = _turn_state_key(kwargs)
+    if key is None:
+        return
+    now = time.time()
+    with _bdh_state_lock:
+        _cleanup_turn_states_locked(now)
+        _turn_states.pop(key, None)
+        _turn_states[key] = {
+            "created_at": now,
+            "user_message": user_message,
+            "rewritten_query": "",
+            "should_query": None,
+        }
+        _cleanup_turn_states_locked(now)
+
+
+def _update_turn_state(kwargs, rewritten_query, should_query):
+    """Attach rewrite classification to the state captured for this turn."""
+    key = _turn_state_key(kwargs)
+    if key is None:
+        return
+    with _bdh_state_lock:
+        state = _turn_states.get(key)
+        if state is not None:
+            state["rewritten_query"] = rewritten_query
+            state["should_query"] = should_query
+
+
+def _pop_turn_state(kwargs):
+    """Return and remove state for a completed turn after pruning stale entries."""
+    key = _turn_state_key(kwargs)
+    if key is None:
+        return None
+    with _bdh_state_lock:
+        _cleanup_turn_states_locked(time.time())
+        return _turn_states.pop(key, None)
 
 
 # ---------------------------------------------------------------------------
@@ -663,7 +733,6 @@ def _on_pre_llm_call(**kwargs):
     both read and write paths are skipped (anti-vault-pollution). On any LLM
     failure, it falls back to the mechanical gate + raw user message.
     """
-    global _last_user_message, _last_rewritten_query, _last_should_query
     try:
         # A new user turn starts here. Clear the previous debug marker so the
         # tag cannot leak into the next answer in a long-lived session.
@@ -675,9 +744,7 @@ def _on_pre_llm_call(**kwargs):
         msg = kwargs.get("user_message", "")
         if not isinstance(msg, str) or not msg.strip():
             return None
-        _last_user_message = msg
-        _last_rewritten_query = ""       # reset per turn
-        _last_should_query = None        # reset per turn
+        _remember_turn_state(kwargs, msg)
 
         if _is_cron_source(kwargs.get("platform"), kwargs.get("source")) and not _cron_has_bdh_opt_in(msg):
             logger.info("[bdh-bridge] automatic retrieval skipped — cron source is deny-by-default")
@@ -698,8 +765,11 @@ def _on_pre_llm_call(**kwargs):
             rewrite_result = _rewrite_query(msg, context_text)
 
             if rewrite_result is not None:
-                _last_should_query = rewrite_result["should_query"]
-                _last_rewritten_query = rewrite_result["query"]
+                _update_turn_state(
+                    kwargs,
+                    rewrite_result["query"],
+                    rewrite_result["should_query"],
+                )
 
                 if not rewrite_result["should_query"]:
                     logger.info("[bdh-bridge] rewrite: LLM classified as non-knowledge — skip read+write")
@@ -757,8 +827,10 @@ def _on_post_api_request(**kwargs):
     embedding seed, not the optimized search_query, so the vault learns from
     real user language rather than translated/keyword artifacts.
     """
-    global _last_user_message, _last_rewritten_query, _last_should_query
     try:
+        # Consume state before any return path so missing/aborted responses do
+        # not leave cross-turn state behind.
+        turn_state = _pop_turn_state(kwargs)
         finish_reason = kwargs.get("finish_reason", "")
         if finish_reason not in ("stop", "length"):
             return
@@ -787,25 +859,26 @@ def _on_post_api_request(**kwargs):
         # Without the user's question, embedding the assistant response alone
         # would create echo loops (finding notes similar to the response,
         # reinforcing existing connections instead of discovering new ones).
-        if not _last_user_message or not _last_user_message.strip():
+        if not turn_state or not turn_state["user_message"].strip():
             logger.debug("[bdh-bridge] skipping write — no user message captured")
             return
+        user_message = turn_state["user_message"]
 
-        if _is_prompt_blacklisted(_last_user_message):
+        if _is_prompt_blacklisted(user_message):
             logger.info("[bdh-bridge] write skipped — prompt is blacklisted")
             return
 
         # v0.6.0: cron deny-by-default is enforced at both read and write. Without
         # an explicit opt-in, the write path must be skipped regardless of any
         # previous turn state. This protects the vault from scheduled-agent noise.
-        if _is_cron_source(kwargs.get("platform"), kwargs.get("source")) and not _cron_has_bdh_opt_in(_last_user_message):
+        if _is_cron_source(kwargs.get("platform"), kwargs.get("source")) and not _cron_has_bdh_opt_in(user_message):
             logger.info("[bdh-bridge] write skipped — cron source is deny-by-default")
             return
 
         # v0.5.0: if classification said should_query=false, skip the write too.
         # This prevents operational noise from polluting the vault via the
         # write path even when the read path was already skipped.
-        if _last_should_query is False:
+        if turn_state["should_query"] is False:
             logger.info("[bdh-bridge] write skipped — LLM classified as non-knowledge")
             return
 
@@ -814,7 +887,7 @@ def _on_post_api_request(**kwargs):
         # v0.5.0: prefer the rewritten query for read/write consistency.
         # v0.6.0: _normalize_query_variants guarantees `query` is always the
         # user-language/intent field, so the write path stays provider-neutral.
-        query = (_last_rewritten_query or _last_user_message)[:1500]
+        query = (turn_state["rewritten_query"] or user_message)[:1500]
         user_prompt = text[:1500]
 
         _bdh_query_async(query, user_prompt=user_prompt, source="assistant_response")
