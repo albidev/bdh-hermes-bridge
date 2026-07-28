@@ -54,8 +54,12 @@ def test_blacklisted_prompt_skips_write(monkeypatch, tmp_path):
     monkeypatch.setattr(bridge, "_bdh_query_async", lambda *args, **kwargs: (
         (_ for _ in ()).throw(AssertionError("unexpected BDH write"))
     ))
-    bridge._last_user_message = "Review the conversation above and update the skill library."
+    state_kwargs = {"session_id": "blacklisted-session"}
+    bridge._remember_turn_state(
+        state_kwargs, "Review the conversation above and update the skill library."
+    )
     bridge._on_post_api_request(
+        session_id="blacklisted-session",
         finish_reason="stop",
         assistant_content_chars=300,
         assistant_message=type("Message", (), {"content": "x" * 300})(),
@@ -82,8 +86,12 @@ def test_cron_skips_write_by_default(monkeypatch):
         "_bdh_query_async",
         lambda *args, **kwargs: writes.append((args, kwargs)),
     )
-    bridge._last_user_message = "Review the latest project architecture and explain the changes."
+    state_kwargs = {"session_id": "cron-session"}
+    bridge._remember_turn_state(
+        state_kwargs, "Review the latest project architecture and explain the changes."
+    )
     bridge._on_post_api_request(
+        session_id="cron-session",
         platform="cron",
         finish_reason="stop",
         assistant_content_chars=300,
@@ -124,6 +132,7 @@ def test_cron_bdh_opt_in_allows_read_and_write(monkeypatch):
     assert result and "context" in result
 
     bridge._on_post_api_request(
+        session_id="cron-session",
         platform="cron",
         finish_reason="stop",
         assistant_content_chars=300,
@@ -617,9 +626,9 @@ def test_post_api_uses_rewritten_query_as_seed(monkeypatch):
         captured.append(query)
 
     monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
-    bridge._last_user_message = "senti ma pensavo ad una cosa sul bridge"
-    bridge._last_rewritten_query = "BDH bridge query rewrite pipeline"
-    bridge._last_should_query = True
+    state_kwargs = {"session_id": "s1"}
+    bridge._remember_turn_state(state_kwargs, "senti ma pensavo ad una cosa sul bridge")
+    bridge._update_turn_state(state_kwargs, "BDH bridge query rewrite pipeline", True)
     bridge._on_post_api_request(
         session_id="s1",
         finish_reason="stop",
@@ -636,15 +645,100 @@ def test_post_api_skips_write_when_classification_false(monkeypatch):
         "_bdh_query_async",
         lambda *a, **kw: (_ for _ in ()).throw(AssertionError("write should be skipped")),
     )
-    bridge._last_user_message = "riavvia il gateway"
-    bridge._last_rewritten_query = ""
-    bridge._last_should_query = False  # classification said no
+    state_kwargs = {"session_id": "s1"}
+    bridge._remember_turn_state(state_kwargs, "riavvia il gateway")
+    bridge._update_turn_state(state_kwargs, "", False)
     bridge._on_post_api_request(
         session_id="s1",
         finish_reason="stop",
         assistant_content_chars=300,
         assistant_message=type("Message", (), {"content": "x" * 300})(),
     )
+
+
+def test_post_api_uses_its_own_interleaved_session_turn_state(monkeypatch):
+    """A's post-hook must not inherit B's rewrite or false classification."""
+    writes = []
+    monkeypatch.setattr(bridge, "_QUERY_REWRITE_ENABLED", True)
+    monkeypatch.setattr(
+        bridge,
+        "_rewrite_query",
+        lambda message, context="": {
+            "should_query": message == "A user message",
+            "query": f"rewrite for {message}",
+            "search_query": f"search for {message}",
+            "sub_queries": [],
+        },
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_bdh_query_sync",
+        lambda *args, **kwargs: {
+            "activated_notes": [{"id": "n1", "title": "Test", "score": 0.9}],
+            "routing": {"hybrid_top_score": 0.8, "vector_top_score": 0.7, "bm25_matched_term_count": 3},
+            "response": "context",
+        },
+    )
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async", lambda query, **kwargs: writes.append((query, kwargs))
+    )
+
+    bridge._on_pre_llm_call(session_id="A", user_message="A user message")
+    bridge._on_pre_llm_call(session_id="B", user_message="B user message")
+    bridge._on_post_api_request(
+        session_id="A",
+        finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "assistant response A"})(),
+    )
+
+    assert writes == [
+        ("rewrite for A user message", {"user_prompt": "assistant response A", "source": "assistant_response"})
+    ]
+
+
+def test_pre_hook_evicts_expired_turn_state_without_evicting_live_turn(monkeypatch):
+    """A missing post-hook expires, while a live turn remains available to post."""
+    writes = []
+    now = [100.0]
+    monkeypatch.setattr(bridge.time, "time", lambda: now[0])
+    monkeypatch.setattr(bridge, "_TURN_STATE_TTL_SECONDS", 10, raising=False)
+    monkeypatch.setattr(bridge, "_QUERY_REWRITE_ENABLED", True)
+    monkeypatch.setattr(
+        bridge,
+        "_rewrite_query",
+        lambda message, context="": {
+            "should_query": True,
+            "query": f"rewrite for {message}",
+            "search_query": f"search for {message}",
+            "sub_queries": [],
+        },
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_bdh_query_sync",
+        lambda *args, **kwargs: {
+            "activated_notes": [{"id": "n1", "title": "Test", "score": 0.9}],
+            "routing": {"hybrid_top_score": 0.8, "vector_top_score": 0.7, "bm25_matched_term_count": 3},
+            "response": "context",
+        },
+    )
+    monkeypatch.setattr(bridge, "_bdh_query_async", lambda query, **kwargs: writes.append(query))
+
+    bridge._on_pre_llm_call(session_id="expired", user_message="expired message")
+    now[0] += 11
+    bridge._on_pre_llm_call(session_id="live", user_message="live message")
+    bridge._on_post_api_request(
+        session_id="expired",
+        finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "late response"})(),
+    )
+    bridge._on_post_api_request(
+        session_id="live",
+        finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "live response"})(),
+    )
+
+    assert writes == ["rewrite for live message"]
 
 
 # ---------------------------------------------------------------------------
@@ -831,9 +925,9 @@ def test_post_api_uses_original_query_for_write_with_variants(monkeypatch):
         captured.append(query)
 
     monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
-    bridge._last_user_message = "senti ma pensavo ad una cosa sul bridge"
-    bridge._last_rewritten_query = "BDH bridge query rewrite pipeline"
-    bridge._last_should_query = True
+    state_kwargs = {"session_id": "s1"}
+    bridge._remember_turn_state(state_kwargs, "senti ma pensavo ad una cosa sul bridge")
+    bridge._update_turn_state(state_kwargs, "BDH bridge query rewrite pipeline", True)
     bridge._on_post_api_request(
         session_id="s1",
         finish_reason="stop",
