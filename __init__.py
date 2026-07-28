@@ -49,7 +49,12 @@ from urllib.error import URLError
 logger = logging.getLogger("bdh-bridge")
 
 # Configurable BDH API URL (env var BDH_API_URL overrides default)
-BDH_API = os.environ.get("BDH_API_URL", "http://localhost:8643")
+_DEFAULT_BDH_API = "http://localhost:8643"
+
+
+def _current_bdh_api():
+    """Resolve BDH_API_URL at request time after gateway configuration loads."""
+    return os.environ.get("BDH_API_URL", _DEFAULT_BDH_API)
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +378,7 @@ def _bdh_request(endpoint, data=None, timeout=10, retries=1, backoff_base=2.0,
 
     Returns response dict on success, None after all retries exhausted.
     """
-    url = f"{BDH_API}{endpoint}"
+    url = f"{_current_bdh_api()}{endpoint}"
     last_error = None
 
     for attempt in range(retries):
