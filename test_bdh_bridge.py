@@ -864,6 +864,20 @@ def test_normalize_query_variants_truncates_over_limit(monkeypatch):
     assert all(v not in result["sub_queries"] for v in [f"v{i}" for i in range(5, 20)])
 
 
+def test_normalize_query_variants_accepts_should_query_false_without_query(monkeypatch):
+    """A rewrite rejection is valid even when the provider omits rewrite fields."""
+    _fake_urlopen_for_content(monkeypatch, {"should_query": False})
+
+    result = bridge._rewrite_query("non cercare nulla nel vault")
+
+    assert result == {
+        "should_query": False,
+        "query": "non cercare nulla nel vault",
+        "search_query": "non cercare nulla nel vault",
+        "sub_queries": [],
+    }
+
+
 def test_normalize_query_variants_falls_back_when_query_missing(monkeypatch):
     """Malformed rewrite output (missing query) triggers full fallback."""
     _fake_urlopen_for_content(monkeypatch, {

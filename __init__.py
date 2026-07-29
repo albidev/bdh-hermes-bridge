@@ -157,6 +157,18 @@ def _normalize_query_variants(result, user_message, max_variants=_REWRITE_MAX_VA
     if not isinstance(result, dict):
         return None
 
+    should_query = bool(result.get("should_query", True))
+    if not should_query:
+        original_query = str(result.get("query") or user_message).strip()
+        if not original_query:
+            return None
+        return {
+            "should_query": False,
+            "query": original_query,
+            "search_query": original_query,
+            "sub_queries": [],
+        }
+
     original_query = result.get("query", "").strip()
     if not original_query:
         return None
