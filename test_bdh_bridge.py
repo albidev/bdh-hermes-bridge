@@ -2,6 +2,8 @@
 
 import importlib.util
 import json
+import threading
+import time
 from pathlib import Path
 
 
@@ -54,8 +56,12 @@ def test_blacklisted_prompt_skips_write(monkeypatch, tmp_path):
     monkeypatch.setattr(bridge, "_bdh_query_async", lambda *args, **kwargs: (
         (_ for _ in ()).throw(AssertionError("unexpected BDH write"))
     ))
-    bridge._last_user_message = "Review the conversation above and update the skill library."
+    state_kwargs = {"session_id": "blacklisted-session"}
+    bridge._remember_turn_state(
+        state_kwargs, "Review the conversation above and update the skill library."
+    )
     bridge._on_post_api_request(
+        session_id="blacklisted-session",
         finish_reason="stop",
         assistant_content_chars=300,
         assistant_message=type("Message", (), {"content": "x" * 300})(),
@@ -82,8 +88,12 @@ def test_cron_skips_write_by_default(monkeypatch):
         "_bdh_query_async",
         lambda *args, **kwargs: writes.append((args, kwargs)),
     )
-    bridge._last_user_message = "Review the latest project architecture and explain the changes."
+    state_kwargs = {"session_id": "cron-session"}
+    bridge._remember_turn_state(
+        state_kwargs, "Review the latest project architecture and explain the changes."
+    )
     bridge._on_post_api_request(
+        session_id="cron-session",
         platform="cron",
         finish_reason="stop",
         assistant_content_chars=300,
@@ -124,6 +134,7 @@ def test_cron_bdh_opt_in_allows_read_and_write(monkeypatch):
     assert result and "context" in result
 
     bridge._on_post_api_request(
+        session_id="cron-session",
         platform="cron",
         finish_reason="stop",
         assistant_content_chars=300,
@@ -176,6 +187,26 @@ def test_pre_llm_returns_ephemeral_context_for_eligible_message(monkeypatch):
     assert "[BDH CONTEXT — optional]" in result["context"]
     assert "Gateway recovery" in result["context"]
     assert "Use this as supporting context." in result["context"]
+
+
+def test_context_exposes_capped_query_variants_as_retrieval_only():
+    context = bridge._format_bdh_context({
+        "activated_notes": [{"id": "n1", "title": "Gateway recovery", "score": 0.91}],
+        "routing": {
+            "query_variants": [
+                {"query": "recupero gateway", "language": "it"},
+                {"query": "gateway recovery", "language": "en"},
+                {"query": "database recovery path", "language": "rewrite"},
+                {"query": "must not be shown", "language": "rewrite"},
+            ],
+        },
+    })
+
+    assert "Query variants (retrieval only):" in context
+    assert "- [it] recupero gateway" in context
+    assert "- [en] gateway recovery" in context
+    assert "- [rewrite] database recovery path" in context
+    assert "must not be shown" not in context
 
 
 def test_hybrid_routing_requires_lexical_or_strong_vector_signal():
@@ -284,6 +315,23 @@ def test_tool_query_passes_explicit_vault(monkeypatch):
     assert captured["kwargs"]["vault_id"] == "research"
 
 
+def test_register_uses_current_plugin_tool_contract():
+    calls = []
+
+    class FakeApp:
+        def register_hook(self, name, fn):
+            pass
+
+        def register_tool(self, **kwargs):
+            calls.append(kwargs)
+
+    bridge.register(FakeApp())
+    assert [call["name"] for call in calls] == ["bdh_query", "bdh_stats"]
+    assert all(call["toolset"] == "bdh" for call in calls)
+    assert all(call["schema"]["parameters"]["type"] == "object" for call in calls)
+    assert calls[0]["schema"]["parameters"]["required"] == ["query"]
+
+
 def test_stats_omits_default_vault_and_encodes_explicit_id(monkeypatch):
     endpoints = []
 
@@ -337,8 +385,17 @@ def test_extract_context_truncates_long_messages():
 
 def test_rewrite_query_returns_none_without_api_key(monkeypatch):
     monkeypatch.setattr(bridge, "_REWRITE_API_KEY", "")
+    monkeypatch.delenv("BDH_REWRITE_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     result = bridge._rewrite_query("test message")
     assert result is None
+
+
+def test_rewrite_query_resolves_key_after_module_import(monkeypatch):
+    """launchd/.env loading may happen after plugin module import."""
+    monkeypatch.setattr(bridge, "_REWRITE_API_KEY", "")
+    monkeypatch.setenv("BDH_REWRITE_API_KEY", "runtime-key")
+    assert bridge._current_rewrite_api_key() == "runtime-key"
 
 
 def test_rewrite_query_parses_valid_json_response(monkeypatch):
@@ -571,9 +628,9 @@ def test_post_api_uses_rewritten_query_as_seed(monkeypatch):
         captured.append(query)
 
     monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
-    bridge._last_user_message = "senti ma pensavo ad una cosa sul bridge"
-    bridge._last_rewritten_query = "BDH bridge query rewrite pipeline"
-    bridge._last_should_query = True
+    state_kwargs = {"session_id": "s1"}
+    bridge._remember_turn_state(state_kwargs, "senti ma pensavo ad una cosa sul bridge")
+    bridge._update_turn_state(state_kwargs, "BDH bridge query rewrite pipeline", True)
     bridge._on_post_api_request(
         session_id="s1",
         finish_reason="stop",
@@ -590,15 +647,103 @@ def test_post_api_skips_write_when_classification_false(monkeypatch):
         "_bdh_query_async",
         lambda *a, **kw: (_ for _ in ()).throw(AssertionError("write should be skipped")),
     )
-    bridge._last_user_message = "riavvia il gateway"
-    bridge._last_rewritten_query = ""
-    bridge._last_should_query = False  # classification said no
+    state_kwargs = {"session_id": "s1"}
+    bridge._remember_turn_state(state_kwargs, "riavvia il gateway")
+    bridge._update_turn_state(state_kwargs, "", False)
     bridge._on_post_api_request(
         session_id="s1",
         finish_reason="stop",
         assistant_content_chars=300,
         assistant_message=type("Message", (), {"content": "x" * 300})(),
     )
+
+
+def test_post_api_uses_its_own_interleaved_session_turn_state(monkeypatch):
+    """A's post-hook must not inherit B's rewrite or false classification."""
+    writes = []
+    monkeypatch.setattr(bridge, "_QUERY_REWRITE_ENABLED", True)
+    monkeypatch.setattr(
+        bridge,
+        "_rewrite_query",
+        lambda message, context="": {
+            "should_query": message == "A user message",
+            "query": f"rewrite for {message}",
+            "search_query": f"search for {message}",
+            "sub_queries": [],
+        },
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_bdh_query_sync",
+        lambda *args, **kwargs: {
+            "activated_notes": [{"id": "n1", "title": "Test", "score": 0.9}],
+            "routing": {"hybrid_top_score": 0.8, "vector_top_score": 0.7, "bm25_matched_term_count": 3},
+            "response": "context",
+        },
+    )
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async", lambda query, **kwargs: writes.append((query, kwargs))
+    )
+
+    bridge._on_pre_llm_call(session_id="A", user_message="A user message")
+    bridge._on_pre_llm_call(session_id="B", user_message="B user message")
+    bridge._on_post_api_request(
+        session_id="A",
+        finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "assistant response A"})(),
+    )
+
+    assert len(writes) == 1
+    assert writes[0][0] == "rewrite for A user message"
+    assert writes[0][1]["user_prompt"] == "assistant response A"
+    assert writes[0][1]["source"] == "assistant_response"
+    # on_success is present — it's the session synthesis callback.
+    assert callable(writes[0][1].get("on_success"))
+
+
+def test_pre_hook_evicts_expired_turn_state_without_evicting_live_turn(monkeypatch):
+    """A missing post-hook expires, while a live turn remains available to post."""
+    writes = []
+    now = [100.0]
+    monkeypatch.setattr(bridge.time, "time", lambda: now[0])
+    monkeypatch.setattr(bridge, "_TURN_STATE_TTL_SECONDS", 10, raising=False)
+    monkeypatch.setattr(bridge, "_QUERY_REWRITE_ENABLED", True)
+    monkeypatch.setattr(
+        bridge,
+        "_rewrite_query",
+        lambda message, context="": {
+            "should_query": True,
+            "query": f"rewrite for {message}",
+            "search_query": f"search for {message}",
+            "sub_queries": [],
+        },
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_bdh_query_sync",
+        lambda *args, **kwargs: {
+            "activated_notes": [{"id": "n1", "title": "Test", "score": 0.9}],
+            "routing": {"hybrid_top_score": 0.8, "vector_top_score": 0.7, "bm25_matched_term_count": 3},
+            "response": "context",
+        },
+    )
+    monkeypatch.setattr(bridge, "_bdh_query_async", lambda query, **kwargs: writes.append(query))
+
+    bridge._on_pre_llm_call(session_id="expired", user_message="expired message")
+    now[0] += 11
+    bridge._on_pre_llm_call(session_id="live", user_message="live message")
+    bridge._on_post_api_request(
+        session_id="expired",
+        finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "late response"})(),
+    )
+    bridge._on_post_api_request(
+        session_id="live",
+        finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "live response"})(),
+    )
+
+    assert writes == ["rewrite for live message"]
 
 
 # ---------------------------------------------------------------------------
@@ -724,6 +869,20 @@ def test_normalize_query_variants_truncates_over_limit(monkeypatch):
     assert all(v not in result["sub_queries"] for v in [f"v{i}" for i in range(5, 20)])
 
 
+def test_normalize_query_variants_accepts_should_query_false_without_query(monkeypatch):
+    """A rewrite rejection is valid even when the provider omits rewrite fields."""
+    _fake_urlopen_for_content(monkeypatch, {"should_query": False})
+
+    result = bridge._rewrite_query("non cercare nulla nel vault")
+
+    assert result == {
+        "should_query": False,
+        "query": "non cercare nulla nel vault",
+        "search_query": "non cercare nulla nel vault",
+        "sub_queries": [],
+    }
+
+
 def test_normalize_query_variants_falls_back_when_query_missing(monkeypatch):
     """Malformed rewrite output (missing query) triggers full fallback."""
     _fake_urlopen_for_content(monkeypatch, {
@@ -785,9 +944,9 @@ def test_post_api_uses_original_query_for_write_with_variants(monkeypatch):
         captured.append(query)
 
     monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
-    bridge._last_user_message = "senti ma pensavo ad una cosa sul bridge"
-    bridge._last_rewritten_query = "BDH bridge query rewrite pipeline"
-    bridge._last_should_query = True
+    state_kwargs = {"session_id": "s1"}
+    bridge._remember_turn_state(state_kwargs, "senti ma pensavo ad una cosa sul bridge")
+    bridge._update_turn_state(state_kwargs, "BDH bridge query rewrite pipeline", True)
     bridge._on_post_api_request(
         session_id="s1",
         finish_reason="stop",
@@ -795,4 +954,482 @@ def test_post_api_uses_original_query_for_write_with_variants(monkeypatch):
         assistant_message=type("Message", (), {"content": "x" * 300})(),
     )
     assert captured[0] == "BDH bridge query rewrite pipeline"
+
+
+# ---------------------------------------------------------------------------
+# v0.7.0: session-end synthesis
+# ---------------------------------------------------------------------------
+
+def _enable_synth(monkeypatch, min_turns=3):
+    monkeypatch.setattr(bridge, "_SESSION_SYNTH_ENABLED", True)
+    monkeypatch.setattr(bridge, "_SESSION_SYNTH_MIN_TURNS", min_turns)
+    bridge._session_buffers.clear()
+    bridge._flushed_sessions.clear()
+    bridge._session_pending_writes.clear()
+    bridge._session_finalize_requested.clear()
+
+
+def _complete_fake_write(kwargs, *, success=True):
+    """Run the production callback order for a synchronous test double."""
+    if success:
+        callback = kwargs.get("on_success")
+        if callback:
+            callback()
+    complete = kwargs.get("on_complete")
+    if complete:
+        complete()
+
+
+def test_session_buffer_accumulates_written_turns(monkeypatch):
+    """Turns are buffered per session only when the write path succeeded."""
+    _enable_synth(monkeypatch)
+    # Simulate successful HTTP write — on_success callback must fire.
+    def fake_async_ok(query, **kwargs):
+        _complete_fake_write(kwargs)
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async_ok)
+
+    state_kwargs = {"session_id": "synth-sess"}
+    bridge._remember_turn_state(state_kwargs, "user q1")
+    bridge._on_post_api_request(
+        session_id="synth-sess", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "answer 1"})(),
+    )
+    bridge._remember_turn_state(state_kwargs, "user q2")
+    bridge._on_post_api_request(
+        session_id="synth-sess", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "answer 2"})(),
+    )
+
+    buf = bridge._session_buffers.get("synth-sess", [])
+    assert len(buf) == 2
+    assert buf[0]["user"] == "user q1"
+    assert buf[1]["assistant"] == "answer 2"
+
+
+def test_session_finalize_flushes_synthesis(monkeypatch):
+    """on_session_finalize synthesises the targeted session."""
+    _enable_synth(monkeypatch, min_turns=2)
+    synth_calls = []
+    # Track all _bdh_query_async calls; fire on_success for per-turn writes
+    # so _remember_session_turn runs and populates the buffer.
+    def fake_async_with_synth(*args, **kwargs):
+        synth_calls.append(kwargs)
+        _complete_fake_write(kwargs)
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async_with_synth)
+    # Filter to the synthesis lane only; the per-turn write path also calls it.
+    def synth_only():
+        return [c for c in synth_calls if c.get("source") == "session_synthesis"]
+
+    # Write two turns in session "a".
+    state_a = {"session_id": "a"}
+    for msg, ans in [("q1", "a1"), ("q2", "a2")]:
+        bridge._remember_turn_state(state_a, msg)
+        bridge._on_post_api_request(
+            session_id="a", finish_reason="stop",
+            assistant_message=type("Message", (), {"content": ans})(),
+        )
+
+    # Finalize session "a" -> flushes "a".
+    bridge._on_session_finalize(session_id="a")
+
+    synths = synth_only()
+    assert len(synths) == 1
+    kw = synths[0]
+    assert kw.get("source") == "session_synthesis"
+    assert "USER: q1" in kw.get("user_prompt", "")
+    assert "ASSISTANT: a2" in kw.get("user_prompt", "")
+    # The "a" buffer is drained after the flush.
+    assert "a" not in bridge._session_buffers
+
+
+def test_session_finalize_below_min_turns_skips(monkeypatch):
+    """Short sessions below min turns are not synthesised on finalize."""
+    _enable_synth(monkeypatch, min_turns=5)
+    synth_calls = []
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async",
+        lambda *a, **kw: synth_calls.append(kw),
+    )
+
+    state_a = {"session_id": "a"}
+    bridge._remember_turn_state(state_a, "q1")
+    bridge._on_post_api_request(
+        session_id="a", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "a1"})(),
+    )
+
+    bridge._on_session_finalize(session_id="a")
+    synth_calls = [c for c in synth_calls if c.get("source") == "session_synthesis"]
+    assert synth_calls == []
+    # Buffer was still drained (no stale synthesis later).
+    assert "a" not in bridge._session_buffers
+
+
+# ---------------------------------------------------------------------------
+# v0.7.1: issue #14 regression tests — lifecycle hooks, interleaving, no dup
+# ---------------------------------------------------------------------------
+
+def test_interleaved_sessions_no_premature_flush(monkeypatch):
+    """Issue #14: sessions A/B interleaving must not flush a live session.
+
+    Scenario: A turn, B pre-hook, A turn, B pre-hook.  Under the old
+    process-global _last_session_key heuristic, B's pre-hook would flush A
+    each time B appeared.  With lifecycle hooks, A is only flushed when
+    Hermes explicitly fires on_session_finalize or on_session_reset.
+    """
+    _enable_synth(monkeypatch, min_turns=2)
+    # Disable rewrite so the mechanical gate + raw message path is used;
+    # this avoids network dependency and keeps the test deterministic.
+    monkeypatch.setattr(bridge, "_QUERY_REWRITE_ENABLED", False)
+    synth_calls = []
+
+    def fake_async_with_synth(*args, **kwargs):
+        synth_calls.append(kwargs)
+        _complete_fake_write(kwargs)
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async", fake_async_with_synth,
+    )
+    monkeypatch.setattr(
+        bridge, "_bdh_query_sync",
+        lambda *a, **kw: {
+            "activated_notes": [], "response": "",
+        },
+    )
+
+    def synth_only():
+        return [c for c in synth_calls if c.get("source") == "session_synthesis"]
+
+    # Turn 1 in session A
+    bridge._on_pre_llm_call(session_id="A", user_message="A first question")
+    bridge._on_post_api_request(
+        session_id="A", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "answer A1"})(),
+    )
+
+    # Turn 1 in session B (interleaving)
+    bridge._on_pre_llm_call(session_id="B", user_message="B first question")
+    bridge._on_post_api_request(
+        session_id="B", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "answer B1"})(),
+    )
+
+    # Turn 2 in session A — A is still alive, must NOT be flushed
+    bridge._on_pre_llm_call(session_id="A", user_message="A second question")
+    bridge._on_post_api_request(
+        session_id="A", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "answer A2"})(),
+    )
+
+    # No lifecycle events yet — zero synthesis calls
+    assert synth_only() == []
+
+    # Turn 2 in session B
+    bridge._on_pre_llm_call(session_id="B", user_message="B second question")
+    bridge._on_post_api_request(
+        session_id="B", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "answer B2"})(),
+    )
+
+    # Still no lifecycle events — zero synthesis
+    assert synth_only() == []
+
+    # Now finalize A — only A should flush
+    bridge._on_session_finalize(session_id="A")
+    synths = synth_only()
+    assert len(synths) == 1
+    assert "USER: A first question" in synths[0]["user_prompt"]
+    assert "ASSISTANT: answer A2" in synths[0]["user_prompt"]
+    # B must still be buffered
+    assert "B" in bridge._session_buffers
+
+    # Finalize B — only B flushes
+    bridge._on_session_finalize(session_id="B")
+    synths = synth_only()
+    assert len(synths) == 2
+    assert "USER: B first question" in synths[1]["user_prompt"]
+    assert "ASSISTANT: answer B2" in synths[1]["user_prompt"]
+    # Both drained
+    assert "A" not in bridge._session_buffers
+    assert "B" not in bridge._session_buffers
+
+
+def test_session_reset_flushes_old_session(monkeypatch):
+    """on_session_reset flushes old_session_id, not the new one."""
+    _enable_synth(monkeypatch, min_turns=2)
+    synth_calls = []
+
+    def fake_async_with_synth(*args, **kwargs):
+        synth_calls.append(kwargs)
+        _complete_fake_write(kwargs)
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async_with_synth)
+
+    def synth_only():
+        return [c for c in synth_calls if c.get("source") == "session_synthesis"]
+
+    state_old = {"session_id": "old"}
+    bridge._remember_turn_state(state_old, "old q1")
+    bridge._on_post_api_request(
+        session_id="old", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "old a1"})(),
+    )
+    bridge._remember_turn_state(state_old, "old q2")
+    bridge._on_post_api_request(
+        session_id="old", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "old a2"})(),
+    )
+
+    # Simulate /new or policy expiry reset
+    bridge._on_session_reset(old_session_id="old", new_session_id="new")
+
+    synths = synth_only()
+    assert len(synths) == 1
+    assert "USER: old q1" in synths[0]["user_prompt"]
+    assert "ASSISTANT: old a2" in synths[0]["user_prompt"]
+    assert "old" not in bridge._session_buffers
+
+    # The new session should not have been flushed
+    bridge._remember_turn_state({"session_id": "new"}, "new q1")
+    bridge._on_post_api_request(
+        session_id="new", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "new a1"})(),
+    )
+    assert "new" in bridge._session_buffers
+    # Only 1 synthesis so far (for "old")
+    assert len(synth_only()) == 1
+
+
+def test_no_duplicate_flush_finalize_then_reset(monkeypatch):
+    """A session finalized and then reset must only flush once."""
+    _enable_synth(monkeypatch, min_turns=2)
+    synth_calls = []
+
+    def fake_async_with_synth(*args, **kwargs):
+        synth_calls.append(kwargs)
+        _complete_fake_write(kwargs)
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async_with_synth)
+
+    def synth_only():
+        return [c for c in synth_calls if c.get("source") == "session_synthesis"]
+
+    state = {"session_id": "s1"}
+    bridge._remember_turn_state(state, "q1")
+    bridge._on_post_api_request(
+        session_id="s1", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "a1"})(),
+    )
+    bridge._remember_turn_state(state, "q2")
+    bridge._on_post_api_request(
+        session_id="s1", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "a2"})(),
+    )
+
+    # Finalize first
+    bridge._on_session_finalize(session_id="s1")
+    assert len(synth_only()) == 1
+    assert "s1" not in bridge._session_buffers
+
+    # Reset with same old_session_id — must NOT flush again
+    bridge._on_session_reset(old_session_id="s1", new_session_id="s2")
+    assert len(synth_only()) == 1  # still 1, not 2
+
+
+def test_session_finalize_waits_for_pending_async_write(monkeypatch):
+    """Issue #17: finalization cannot outrun the last async write."""
+    _enable_synth(monkeypatch, min_turns=1)
+    calls = []
+    pending = []
+
+    def fake_async(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            pending.append(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    state = {"session_id": "race-sess"}
+    bridge._remember_turn_state(state, "last question")
+    bridge._on_post_api_request(
+        session_id="race-sess", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "last answer"})(),
+    )
+    assert len(pending) == 1
+
+    # The lifecycle event arrives before BDH confirms the write.
+    bridge._on_session_finalize(session_id="race-sess")
+    assert [c for c in calls if c.get("source") == "session_synthesis"] == []
+    assert bridge._session_pending_writes["race-sess"] == 1
+
+    # Success makes the turn eligible, but completion is the barrier release.
+    pending[0]["on_success"]()
+    assert [c for c in calls if c.get("source") == "session_synthesis"] == []
+    pending[0]["on_complete"]()
+
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+    assert "USER: last question" in syntheses[0]["user_prompt"]
+    assert "ASSISTANT: last answer" in syntheses[0]["user_prompt"]
+    assert "race-sess" not in bridge._session_pending_writes
+
+
+def test_finalize_noop_when_session_never_wrote(monkeypatch):
+    """Finalize on a session that never accumulated turns is a clean noop."""
+    _enable_synth(monkeypatch, min_turns=1)
+    synth_calls = []
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async",
+        lambda *a, **kw: synth_calls.append(kw),
+    )
+    bridge._on_session_finalize(session_id="never-existed")
+    assert [c for c in synth_calls if c.get("source") == "session_synthesis"] == []
+
+
+def test_register_wires_session_lifecycle_hooks():
+    """register() exposes on_session_finalize and on_session_reset."""
+    hooks = []
+
+    class FakeApp:
+        def register_hook(self, name, fn):
+            hooks.append(name)
+
+        def register_tool(self, **kwargs):
+            pass
+
+    bridge.register(FakeApp())
+    assert "on_session_finalize" in hooks
+    assert "on_session_reset" in hooks
+
+
+# ---------------------------------------------------------------------------
+# v0.7.1 — async-write success callback regression tests (issue #15)
+# ---------------------------------------------------------------------------
+
+
+def test_write_success_buffers_session_turn(monkeypatch):
+    """Session buffer is populated only when the async write succeeds."""
+    _enable_synth(monkeypatch)
+    # Simulate a successful HTTP write: the worker gets a result dict.
+    def fake_async_success(query, **kwargs):
+        _complete_fake_write(kwargs)
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async_success)
+
+    state_kwargs = {"session_id": "ok-sess"}
+    bridge._remember_turn_state(state_kwargs, "user question")
+    bridge._on_post_api_request(
+        session_id="ok-sess", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "assistant answer"})(),
+    )
+    buf = bridge._session_buffers.get("ok-sess", [])
+    assert len(buf) == 1
+    assert buf[0]["user"] == "user question"
+    assert buf[0]["assistant"] == "assistant answer"
+
+
+def test_write_failure_does_not_buffer_session_turn(monkeypatch):
+    """A failed async write must NOT enter the session synthesis buffer."""
+    _enable_synth(monkeypatch)
+    # Simulate a failed HTTP write: on_success is never called, completion is.
+    def fake_async_failure(query, **kwargs):
+        _complete_fake_write(kwargs, success=False)
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async_failure)
+
+    state_kwargs = {"session_id": "fail-sess"}
+    bridge._remember_turn_state(state_kwargs, "user question")
+    bridge._on_post_api_request(
+        session_id="fail-sess", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "assistant answer"})(),
+    )
+    buf = bridge._session_buffers.get("fail-sess", [])
+    assert len(buf) == 0
+
+
+def test_write_recovery_after_failure(monkeypatch):
+    """After a failed write, a subsequent successful write still buffers."""
+    _enable_synth(monkeypatch)
+    call_count = [0]
+
+    def flaky_async(query, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            # First call: HTTP failure — on_success not called, completion is.
+            _complete_fake_write(kwargs, success=False)
+            return
+        # Second call: HTTP success — fire both callbacks.
+        _complete_fake_write(kwargs)
+    monkeypatch.setattr(bridge, "_bdh_query_async", flaky_async)
+
+    # Turn 1: fails
+    state1 = {"session_id": "recover-sess"}
+    bridge._remember_turn_state(state1, "failed question")
+    bridge._on_post_api_request(
+        session_id="recover-sess", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "failed answer"})(),
+    )
+    assert len(bridge._session_buffers.get("recover-sess", [])) == 0
+
+    # Turn 2: succeeds
+    state2 = {"session_id": "recover-sess"}
+    bridge._remember_turn_state(state2, "recovered question")
+    bridge._on_post_api_request(
+        session_id="recover-sess", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "recovered answer"})(),
+    )
+    buf = bridge._session_buffers.get("recover-sess", [])
+    assert len(buf) == 1
+    assert buf[0]["user"] == "recovered question"
+
+
+def test_on_success_callback_exception_does_not_crash(monkeypatch):
+    """A buggy on_success callback is caught, not propagated."""
+    _enable_synth(monkeypatch)
+
+    def exploding_callback():
+        raise RuntimeError("kaboom")
+
+    def fake_async(query, **kwargs):
+        cb = kwargs.get("on_success")
+        if cb:
+            cb()
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+
+    state_kwargs = {"session_id": "crash-sess"}
+    bridge._remember_turn_state(state_kwargs, "q")
+    # Must not raise even though the callback explodes.
+    bridge._on_post_api_request(
+        session_id="crash-sess", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "a"})(),
+    )
+
+
+def test_real_async_success_fires_callback(monkeypatch):
+    """Real _bdh_query_async calls on_success after a successful HTTP response."""
+    _enable_synth(monkeypatch)
+    callback_fired = threading.Event()
+
+    def fake_request(endpoint, data=None, **kwargs):
+        return {"response": "ok"}  # Simulate HTTP success
+
+    monkeypatch.setattr(bridge, "_bdh_request", fake_request)
+
+    # Directly call the real _bdh_query_async with a mock _bdh_request.
+    bridge._bdh_query_async(
+        "test query", on_success=lambda: callback_fired.set(),
+    )
+    assert callback_fired.wait(timeout=2), "on_success callback was not fired"
+
+
+def test_real_async_failure_skips_callback(monkeypatch):
+    """Real _bdh_query_async does NOT call on_success when HTTP fails."""
+    _enable_synth(monkeypatch)
+    callback_fired = threading.Event()
+
+    def fake_request(endpoint, data=None, **kwargs):
+        return None  # Simulate HTTP failure
+
+    monkeypatch.setattr(bridge, "_bdh_request", fake_request)
+
+    bridge._bdh_query_async(
+        "test query", on_success=lambda: callback_fired.set(),
+    )
+    # Give the daemon thread a moment to complete.
+    time.sleep(0.5)
+    assert not callback_fired.is_set(), "on_success should NOT fire on failure"
 
