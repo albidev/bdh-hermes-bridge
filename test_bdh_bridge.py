@@ -2,6 +2,8 @@
 
 import importlib.util
 import json
+import threading
+import time
 from pathlib import Path
 
 
@@ -691,9 +693,12 @@ def test_post_api_uses_its_own_interleaved_session_turn_state(monkeypatch):
         assistant_message=type("Message", (), {"content": "assistant response A"})(),
     )
 
-    assert writes == [
-        ("rewrite for A user message", {"user_prompt": "assistant response A", "source": "assistant_response"})
-    ]
+    assert len(writes) == 1
+    assert writes[0][0] == "rewrite for A user message"
+    assert writes[0][1]["user_prompt"] == "assistant response A"
+    assert writes[0][1]["source"] == "assistant_response"
+    # on_success is present — it's the session synthesis callback.
+    assert callable(writes[0][1].get("on_success"))
 
 
 def test_pre_hook_evicts_expired_turn_state_without_evicting_live_turn(monkeypatch):
@@ -960,12 +965,28 @@ def _enable_synth(monkeypatch, min_turns=3):
     monkeypatch.setattr(bridge, "_SESSION_SYNTH_MIN_TURNS", min_turns)
     bridge._session_buffers.clear()
     bridge._flushed_sessions.clear()
+    bridge._session_pending_writes.clear()
+    bridge._session_finalize_requested.clear()
+
+
+def _complete_fake_write(kwargs, *, success=True):
+    """Run the production callback order for a synchronous test double."""
+    if success:
+        callback = kwargs.get("on_success")
+        if callback:
+            callback()
+    complete = kwargs.get("on_complete")
+    if complete:
+        complete()
 
 
 def test_session_buffer_accumulates_written_turns(monkeypatch):
-    """Turns are buffered per session only when the write path fired."""
+    """Turns are buffered per session only when the write path succeeded."""
     _enable_synth(monkeypatch)
-    monkeypatch.setattr(bridge, "_bdh_query_async", lambda *a, **kw: None)
+    # Simulate successful HTTP write — on_success callback must fire.
+    def fake_async_ok(query, **kwargs):
+        _complete_fake_write(kwargs)
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async_ok)
 
     state_kwargs = {"session_id": "synth-sess"}
     bridge._remember_turn_state(state_kwargs, "user q1")
@@ -989,10 +1010,12 @@ def test_session_finalize_flushes_synthesis(monkeypatch):
     """on_session_finalize synthesises the targeted session."""
     _enable_synth(monkeypatch, min_turns=2)
     synth_calls = []
-    monkeypatch.setattr(
-        bridge, "_bdh_query_async",
-        lambda *a, **kw: synth_calls.append(kw),
-    )
+    # Track all _bdh_query_async calls; fire on_success for per-turn writes
+    # so _remember_session_turn runs and populates the buffer.
+    def fake_async_with_synth(*args, **kwargs):
+        synth_calls.append(kwargs)
+        _complete_fake_write(kwargs)
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async_with_synth)
     # Filter to the synthesis lane only; the per-turn write path also calls it.
     def synth_only():
         return [c for c in synth_calls if c.get("source") == "session_synthesis"]
@@ -1059,9 +1082,12 @@ def test_interleaved_sessions_no_premature_flush(monkeypatch):
     # this avoids network dependency and keeps the test deterministic.
     monkeypatch.setattr(bridge, "_QUERY_REWRITE_ENABLED", False)
     synth_calls = []
+
+    def fake_async_with_synth(*args, **kwargs):
+        synth_calls.append(kwargs)
+        _complete_fake_write(kwargs)
     monkeypatch.setattr(
-        bridge, "_bdh_query_async",
-        lambda *a, **kw: synth_calls.append(kw),
+        bridge, "_bdh_query_async", fake_async_with_synth,
     )
     monkeypatch.setattr(
         bridge, "_bdh_query_sync",
@@ -1131,10 +1157,11 @@ def test_session_reset_flushes_old_session(monkeypatch):
     """on_session_reset flushes old_session_id, not the new one."""
     _enable_synth(monkeypatch, min_turns=2)
     synth_calls = []
-    monkeypatch.setattr(
-        bridge, "_bdh_query_async",
-        lambda *a, **kw: synth_calls.append(kw),
-    )
+
+    def fake_async_with_synth(*args, **kwargs):
+        synth_calls.append(kwargs)
+        _complete_fake_write(kwargs)
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async_with_synth)
 
     def synth_only():
         return [c for c in synth_calls if c.get("source") == "session_synthesis"]
@@ -1175,10 +1202,11 @@ def test_no_duplicate_flush_finalize_then_reset(monkeypatch):
     """A session finalized and then reset must only flush once."""
     _enable_synth(monkeypatch, min_turns=2)
     synth_calls = []
-    monkeypatch.setattr(
-        bridge, "_bdh_query_async",
-        lambda *a, **kw: synth_calls.append(kw),
-    )
+
+    def fake_async_with_synth(*args, **kwargs):
+        synth_calls.append(kwargs)
+        _complete_fake_write(kwargs)
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async_with_synth)
 
     def synth_only():
         return [c for c in synth_calls if c.get("source") == "session_synthesis"]
@@ -1203,6 +1231,43 @@ def test_no_duplicate_flush_finalize_then_reset(monkeypatch):
     # Reset with same old_session_id — must NOT flush again
     bridge._on_session_reset(old_session_id="s1", new_session_id="s2")
     assert len(synth_only()) == 1  # still 1, not 2
+
+
+def test_session_finalize_waits_for_pending_async_write(monkeypatch):
+    """Issue #17: finalization cannot outrun the last async write."""
+    _enable_synth(monkeypatch, min_turns=1)
+    calls = []
+    pending = []
+
+    def fake_async(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            pending.append(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    state = {"session_id": "race-sess"}
+    bridge._remember_turn_state(state, "last question")
+    bridge._on_post_api_request(
+        session_id="race-sess", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "last answer"})(),
+    )
+    assert len(pending) == 1
+
+    # The lifecycle event arrives before BDH confirms the write.
+    bridge._on_session_finalize(session_id="race-sess")
+    assert [c for c in calls if c.get("source") == "session_synthesis"] == []
+    assert bridge._session_pending_writes["race-sess"] == 1
+
+    # Success makes the turn eligible, but completion is the barrier release.
+    pending[0]["on_success"]()
+    assert [c for c in calls if c.get("source") == "session_synthesis"] == []
+    pending[0]["on_complete"]()
+
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+    assert "USER: last question" in syntheses[0]["user_prompt"]
+    assert "ASSISTANT: last answer" in syntheses[0]["user_prompt"]
+    assert "race-sess" not in bridge._session_pending_writes
 
 
 def test_finalize_noop_when_session_never_wrote(monkeypatch):
@@ -1231,4 +1296,140 @@ def test_register_wires_session_lifecycle_hooks():
     bridge.register(FakeApp())
     assert "on_session_finalize" in hooks
     assert "on_session_reset" in hooks
+
+
+# ---------------------------------------------------------------------------
+# v0.7.1 — async-write success callback regression tests (issue #15)
+# ---------------------------------------------------------------------------
+
+
+def test_write_success_buffers_session_turn(monkeypatch):
+    """Session buffer is populated only when the async write succeeds."""
+    _enable_synth(monkeypatch)
+    # Simulate a successful HTTP write: the worker gets a result dict.
+    def fake_async_success(query, **kwargs):
+        _complete_fake_write(kwargs)
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async_success)
+
+    state_kwargs = {"session_id": "ok-sess"}
+    bridge._remember_turn_state(state_kwargs, "user question")
+    bridge._on_post_api_request(
+        session_id="ok-sess", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "assistant answer"})(),
+    )
+    buf = bridge._session_buffers.get("ok-sess", [])
+    assert len(buf) == 1
+    assert buf[0]["user"] == "user question"
+    assert buf[0]["assistant"] == "assistant answer"
+
+
+def test_write_failure_does_not_buffer_session_turn(monkeypatch):
+    """A failed async write must NOT enter the session synthesis buffer."""
+    _enable_synth(monkeypatch)
+    # Simulate a failed HTTP write: on_success is never called, completion is.
+    def fake_async_failure(query, **kwargs):
+        _complete_fake_write(kwargs, success=False)
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async_failure)
+
+    state_kwargs = {"session_id": "fail-sess"}
+    bridge._remember_turn_state(state_kwargs, "user question")
+    bridge._on_post_api_request(
+        session_id="fail-sess", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "assistant answer"})(),
+    )
+    buf = bridge._session_buffers.get("fail-sess", [])
+    assert len(buf) == 0
+
+
+def test_write_recovery_after_failure(monkeypatch):
+    """After a failed write, a subsequent successful write still buffers."""
+    _enable_synth(monkeypatch)
+    call_count = [0]
+
+    def flaky_async(query, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            # First call: HTTP failure — on_success not called, completion is.
+            _complete_fake_write(kwargs, success=False)
+            return
+        # Second call: HTTP success — fire both callbacks.
+        _complete_fake_write(kwargs)
+    monkeypatch.setattr(bridge, "_bdh_query_async", flaky_async)
+
+    # Turn 1: fails
+    state1 = {"session_id": "recover-sess"}
+    bridge._remember_turn_state(state1, "failed question")
+    bridge._on_post_api_request(
+        session_id="recover-sess", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "failed answer"})(),
+    )
+    assert len(bridge._session_buffers.get("recover-sess", [])) == 0
+
+    # Turn 2: succeeds
+    state2 = {"session_id": "recover-sess"}
+    bridge._remember_turn_state(state2, "recovered question")
+    bridge._on_post_api_request(
+        session_id="recover-sess", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "recovered answer"})(),
+    )
+    buf = bridge._session_buffers.get("recover-sess", [])
+    assert len(buf) == 1
+    assert buf[0]["user"] == "recovered question"
+
+
+def test_on_success_callback_exception_does_not_crash(monkeypatch):
+    """A buggy on_success callback is caught, not propagated."""
+    _enable_synth(monkeypatch)
+
+    def exploding_callback():
+        raise RuntimeError("kaboom")
+
+    def fake_async(query, **kwargs):
+        cb = kwargs.get("on_success")
+        if cb:
+            cb()
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+
+    state_kwargs = {"session_id": "crash-sess"}
+    bridge._remember_turn_state(state_kwargs, "q")
+    # Must not raise even though the callback explodes.
+    bridge._on_post_api_request(
+        session_id="crash-sess", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "a"})(),
+    )
+
+
+def test_real_async_success_fires_callback(monkeypatch):
+    """Real _bdh_query_async calls on_success after a successful HTTP response."""
+    _enable_synth(monkeypatch)
+    callback_fired = threading.Event()
+
+    def fake_request(endpoint, data=None, **kwargs):
+        return {"response": "ok"}  # Simulate HTTP success
+
+    monkeypatch.setattr(bridge, "_bdh_request", fake_request)
+
+    # Directly call the real _bdh_query_async with a mock _bdh_request.
+    bridge._bdh_query_async(
+        "test query", on_success=lambda: callback_fired.set(),
+    )
+    assert callback_fired.wait(timeout=2), "on_success callback was not fired"
+
+
+def test_real_async_failure_skips_callback(monkeypatch):
+    """Real _bdh_query_async does NOT call on_success when HTTP fails."""
+    _enable_synth(monkeypatch)
+    callback_fired = threading.Event()
+
+    def fake_request(endpoint, data=None, **kwargs):
+        return None  # Simulate HTTP failure
+
+    monkeypatch.setattr(bridge, "_bdh_request", fake_request)
+
+    bridge._bdh_query_async(
+        "test query", on_success=lambda: callback_fired.set(),
+    )
+    # Give the daemon thread a moment to complete.
+    time.sleep(0.5)
+    assert not callback_fired.is_set(), "on_success should NOT fire on failure"
 
