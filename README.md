@@ -8,7 +8,7 @@ Bidirectional plugin bridge between [Hermes Agent](https://github.com/NousResear
 
 The plugin connects Hermes' real conversations to BDH's neural knowledge graph and exposes BDH context as native Hermes tools. It learns from actual usage — not fabricated bridge queries.
 
-> **Status:** standalone Hermes plugin, version **0.6.0**.
+> **Status:** standalone Hermes plugin, version **0.7.1**.
 
 ## What it does
 
@@ -87,6 +87,9 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 | `BDH_REWRITE_PROMPT_FILE` | empty | Path to custom Markdown prompt file |
 | `BDH_CONTEXT_MESSAGES_N` | `6` | Number of conversation_history messages to include |
 | `BDH_CONTEXT_MSG_MAX_CHARS` | `200` | Max chars per context message |
+| `BDH_SESSION_SYNTH_ENABLED` | `false` | Opt-in for cross-session synthesis on Hermes session finalization/reset |
+| `BDH_SESSION_SYNTH_MIN_TURNS` | `3` | Minimum written turns before a session is worth synthesising |
+| `BDH_SESSION_SYNTH_MAX_CHARS` | `6000` | Max characters of transcript fed to the synthesis LLM |
 
 **Default classification prompt:**
 
@@ -318,7 +321,7 @@ Plugins are loaded at process startup. Editing `__init__.py` without restarting 
 
 ```yaml
 name: bdh-hermes-bridge
-version: 0.5.0
+version: 0.7.1
 kind: standalone
 provides_hooks:
   - pre_llm_call

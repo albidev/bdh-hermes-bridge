@@ -4,6 +4,17 @@ BDH Bridge — Bidirectional Hermes ↔ BDH Graph Harness integration.
 Write path: feeds session content to BDH after each API response.
 Read path: provides bdh_query and bdh_stats tools.
 
+v0.7.1:
+  - Session-end synthesis: accumulate written turns per session and, on
+    session identity lifecycle (finalize/reset), flush a single curated
+    synthesis so BDH learns the insight that emerges across the whole
+    conversation, not just per-turn noise
+  - Uses Hermes on_session_finalize / on_session_reset hooks instead of
+    process-global session-rotation inference (#14)
+  - Each session buffer is flushed at most once via _flushed_sessions guard
+  - Opt-in via BDH_SESSION_SYNTH_ENABLED=true (default off)
+  - BDH_SESSION_SYNTH_MIN_TURNS (default 3), BDH_SESSION_SYNTH_MAX_CHARS (default 6000)
+
 v0.6.0:
   - Language-agnostic multi-query retrieval bridge normalization (#19)
   - Optional provider-specific arrays `search_queries`/`query_variants` are
@@ -67,7 +78,24 @@ _TURN_STATE_TTL_SECONDS = min(
 _TURN_STATE_MAX_ENTRIES = max(
     int(os.environ.get("BDH_TURN_STATE_MAX_ENTRIES", "1000")), 1
 )
+# Session-end synthesis (v0.7.1): accumulate written turns per session and, on
+# Hermes session finalization/reset, send a single curated synthesis so the
+# vault learns the insight that emerges across the whole conversation, not just
+# per-turn noise.
+_SESSION_SYNTH_ENABLED = os.environ.get("BDH_SESSION_SYNTH_ENABLED", "").lower() in (
+    "1", "true", "yes", "on",
+)
+# A session is only worth synthesising once it has at least this many written
+# turns — a 1-turn session is already covered by the per-turn write path.
+_SESSION_SYNTH_MIN_TURNS = int(os.environ.get("BDH_SESSION_SYNTH_MIN_TURNS", "3"))
+# Cap the transcript we feed to the synthesis so a long session cannot blow up
+# the BDH request / neurogenesis context.
+_SESSION_SYNTH_MAX_CHARS = int(os.environ.get("BDH_SESSION_SYNTH_MAX_CHARS", "6000"))
 _turn_states = {}
+_session_buffers = {}  # session_id -> list of {"user": ..., "assistant": ...}
+_flushed_sessions = set()  # session_ids already flushed — never double-flush
+_session_pending_writes = {}  # session_id -> number of in-flight per-turn writes
+_session_finalize_requested = set()  # sessions waiting for pending writes to settle
 _bdh_used_sessions = set()
 _bdh_state_lock = threading.Lock()
 _AUTO_RETRIEVAL_MIN_SCORE = 0.30
@@ -375,6 +403,137 @@ def _pop_turn_state(kwargs):
 
 
 # ---------------------------------------------------------------------------
+# Session-end synthesis helpers (v0.7.0)
+# ---------------------------------------------------------------------------
+
+def _remember_session_turn(session_id, user_message, assistant_text):
+    """Append one written turn to the per-session synthesis buffer.
+
+    Only called when the per-turn write path actually succeeded, so the
+    synthesis never introduces content that wasn't already fed to BDH.
+    """
+    if not session_id or not _SESSION_SYNTH_ENABLED:
+        return
+    session_id = str(session_id)
+    with _bdh_state_lock:
+        # A late callback from a write submitted after the lifecycle boundary
+        # must not resurrect a session that was already drained.
+        if session_id in _flushed_sessions:
+            return
+        buf = _session_buffers.setdefault(session_id, [])
+        # Cap buffer length to bound memory on very long sessions.
+        if len(buf) >= 200:
+            buf.pop(0)
+        buf.append({
+            "user": (user_message or "")[:1500],
+            "assistant": (assistant_text or "")[:1500],
+        })
+
+
+def _flush_session_synthesis(session_id):
+    """Fire-and-forget a curated session synthesis to BDH, if worth it.
+
+    If per-turn writes are still in flight, mark the lifecycle boundary and
+    let their completion callback retry the flush. The hook itself remains
+    non-blocking and failed writes never enter the transcript buffer.
+    """
+    if not _SESSION_SYNTH_ENABLED or not session_id:
+        return
+    session_id = str(session_id)
+    with _bdh_state_lock:
+        if session_id in _flushed_sessions:
+            return
+        if _session_pending_writes.get(session_id, 0):
+            _session_finalize_requested.add(session_id)
+            return
+        _flushed_sessions.add(session_id)
+        _session_finalize_requested.discard(session_id)
+        buf = _session_buffers.pop(session_id, None)
+    if not buf:
+        return
+    if len(buf) < _SESSION_SYNTH_MIN_TURNS:
+        logger.debug(
+            f"[bdh-bridge] session {session_id}: only {len(buf)} turn(s), "
+            f"below min {_SESSION_SYNTH_MIN_TURNS} — skipping synthesis"
+        )
+        return
+
+    # Compact the transcript, keeping user questions and assistant answers.
+    lines = []
+    for t in buf:
+        u = t.get("user", "").strip()
+        a = t.get("assistant", "").strip()
+        if not u:
+            continue
+        lines.append(f"USER: {u}")
+        if a:
+            lines.append(f"ASSISTANT: {a}")
+    transcript = "\n".join(lines)
+    if len(transcript) > _SESSION_SYNTH_MAX_CHARS:
+        transcript = transcript[-_SESSION_SYNTH_MAX_CHARS:]
+
+    query = (
+        "Synthesis of an entire agent session. Extract and record any durable "
+        "concept, decision, architecture choice, lesson learned, or reusable "
+        "insight that emerged across the conversation as a whole — not per-turn "
+        "noise. Ignore operational status, diagnostics, and transient tasks."
+    )
+    # _bdh_query_async already spawns its own daemon thread (fire-and-forget),
+    # so call it directly — no nested thread needed.
+    try:
+        _bdh_query_async(
+            query_text=query,
+            user_prompt=transcript,
+            source="session_synthesis",
+        )
+        logger.info(f"[bdh-bridge] session {session_id} synthesis queued ({len(buf)} turns)")
+    except Exception as e:
+        logger.warning(f"[bdh-bridge] session synthesis start error: {e}")
+
+
+def _session_write_complete(session_id):
+    """Release one pending write and flush if lifecycle already finalized it."""
+    if not session_id:
+        return
+    session_id = str(session_id)
+    should_flush = False
+    with _bdh_state_lock:
+        pending = _session_pending_writes.get(session_id, 0)
+        if pending <= 1:
+            _session_pending_writes.pop(session_id, None)
+            should_flush = session_id in _session_finalize_requested
+        else:
+            _session_pending_writes[session_id] = pending - 1
+    if should_flush:
+        _flush_session_synthesis(session_id)
+
+
+def _on_session_finalize(**kwargs):
+    """Flush synthesis buffer for a session identity being torn down.
+
+    Hermes fires on_session_finalize when the CLI or gateway tears down an
+    active session identity. The flush is deferred until any in-flight turn
+    writes have completed.
+    """
+    try:
+        session_id = kwargs.get("session_id")
+        if session_id:
+            _flush_session_synthesis(session_id)
+    except Exception as e:
+        logger.debug(f"[bdh-bridge] on_session_finalize error: {e}")
+
+
+def _on_session_reset(**kwargs):
+    """Flush synthesis for the old identity when Hermes replaces a session."""
+    try:
+        old_session_id = kwargs.get("old_session_id")
+        if old_session_id:
+            _flush_session_synthesis(old_session_id)
+    except Exception as e:
+        logger.debug(f"[bdh-bridge] on_session_reset error: {e}")
+
+
+# ---------------------------------------------------------------------------
 # BDH HTTP helpers
 # ---------------------------------------------------------------------------
 
@@ -558,11 +717,20 @@ def _format_bdh_context(result):
     return "\n".join(lines)
 
 
-def _bdh_query_async(query_text, user_prompt=None, source="assistant_response"):
+def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
+                     on_success=None, on_complete=None):
     """Fire-and-forget query — used by hooks.
 
     Short timeout (30s) and 1 retry. If BDH is down, the daemon thread
     exits quickly instead of piling up.
+
+    Args:
+        on_success: Optional zero-arg callback invoked **only** after the
+            HTTP request succeeds (result is not None). Called from the
+            daemon thread and must be thread-safe.
+        on_complete: Optional zero-arg callback invoked exactly once after
+            the worker has a result, including failure. This lets lifecycle
+            code release pending-write state without waiting or joining.
     """
     def _worker():
         payload = {"query": query_text}
@@ -571,19 +739,36 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response"):
         if source:
             payload["source"] = source
 
-        result = _bdh_request("/api/query", payload, timeout=30, retries=2,
-                               retry_on_timeout=False)
-        if result:
-            new = result.get("new_concepts", [])
-            activated = len(result.get("activated_notes", []))
-            hebbian = len(result.get("hebbian_updates", []))
-            if new:
-                logger.info(
-                    f"[bdh-bridge] neurogenesis: {len(new)} new concepts "
-                    f"({activated} activated, {hebbian} hebbian updates)"
-                )
-        else:
-            logger.warning("[bdh-bridge] BDH unreachable — consolidation or server down")
+        result = None
+        try:
+            result = _bdh_request("/api/query", payload, timeout=30, retries=2,
+                                  retry_on_timeout=False)
+            if result:
+                new = result.get("new_concepts", [])
+                activated = len(result.get("activated_notes", []))
+                hebbian = len(result.get("hebbian_updates", []))
+                if new:
+                    logger.info(
+                        f"[bdh-bridge] neurogenesis: {len(new)} new concepts "
+                        f"({activated} activated, {hebbian} hebbian updates)"
+                    )
+                if on_success is not None:
+                    try:
+                        on_success()
+                    except Exception as cb_err:
+                        logger.warning(
+                            f"[bdh-bridge] on_success callback error: {cb_err}"
+                        )
+            else:
+                logger.warning("[bdh-bridge] BDH unreachable — consolidation or server down")
+        finally:
+            if on_complete is not None:
+                try:
+                    on_complete()
+                except Exception as cb_err:
+                    logger.warning(
+                        f"[bdh-bridge] on_complete callback error: {cb_err}"
+                    )
 
     threading.Thread(target=_worker, daemon=True).start()
 
@@ -907,7 +1092,32 @@ def _on_post_api_request(**kwargs):
         query = (turn_state["rewritten_query"] or user_message)[:1500]
         user_prompt = text[:1500]
 
-        _bdh_query_async(query, user_prompt=user_prompt, source="assistant_response")
+        # v0.7.0/#15: remember the turn only after a successful write, and
+        # release the pending barrier on both success and failure.
+        session_id = kwargs.get("session_id")
+        pending_registered = bool(session_id and _SESSION_SYNTH_ENABLED)
+        if pending_registered:
+            with _bdh_state_lock:
+                session_id = str(session_id)
+                _session_pending_writes[session_id] = (
+                    _session_pending_writes.get(session_id, 0) + 1
+                )
+
+        try:
+            _bdh_query_async(
+                query, user_prompt=user_prompt, source="assistant_response",
+                on_success=lambda: _remember_session_turn(
+                    session_id, user_message, text,
+                ),
+                on_complete=(
+                    lambda: _session_write_complete(session_id)
+                    if pending_registered else None
+                ),
+            )
+        except Exception:
+            if pending_registered:
+                _session_write_complete(session_id)
+            raise
 
     except Exception as e:
         logger.warning(f"[bdh-bridge] post_api_request hook error: {e}")
@@ -1088,8 +1298,8 @@ _BDH_STATS_SCHEMA = {
 # Minimal plugin metadata returned for Hermes introspection.
 PLUGIN = {
     "name": "bdh-bridge",
-    "version": "0.6.0",
-    "description": "Bidirectional Hermes ↔ BDH Graph Harness bridge with query rewrite and normalization.",
+    "version": "0.7.1",
+    "description": "Bidirectional Hermes ↔ BDH Graph Harness bridge with query rewrite, normalization, session synthesis, and lifecycle hooks.",
 }
 
 
@@ -1103,6 +1313,9 @@ def register(app):
     app.register_hook("post_api_request", _on_post_api_request)
     app.register_hook("post_tool_call", _on_post_tool_call)
     app.register_hook("transform_llm_output", _on_transform_llm_output)
+    # v0.7.1: session lifecycle hooks for synthesis flush (issue #14)
+    app.register_hook("on_session_finalize", _on_session_finalize)
+    app.register_hook("on_session_reset", _on_session_reset)
 
     app.register_tool(
         name="bdh_query",
