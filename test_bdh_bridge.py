@@ -950,3 +950,94 @@ def test_post_api_uses_original_query_for_write_with_variants(monkeypatch):
     )
     assert captured[0] == "BDH bridge query rewrite pipeline"
 
+
+# ---------------------------------------------------------------------------
+# v0.7.0: session-end synthesis
+# ---------------------------------------------------------------------------
+
+def _enable_synth(monkeypatch, min_turns=3):
+    monkeypatch.setattr(bridge, "_SESSION_SYNTH_ENABLED", True)
+    monkeypatch.setattr(bridge, "_SESSION_SYNTH_MIN_TURNS", min_turns)
+    bridge._session_buffers.clear()
+    bridge._last_session_key = None
+
+
+def test_session_buffer_accumulates_written_turns(monkeypatch):
+    """Turns are buffered per session only when the write path fired."""
+    _enable_synth(monkeypatch)
+    monkeypatch.setattr(bridge, "_bdh_query_async", lambda *a, **kw: None)
+
+    state_kwargs = {"session_id": "synth-sess"}
+    bridge._remember_turn_state(state_kwargs, "user q1")
+    bridge._on_post_api_request(
+        session_id="synth-sess", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "answer 1"})(),
+    )
+    bridge._remember_turn_state(state_kwargs, "user q2")
+    bridge._on_post_api_request(
+        session_id="synth-sess", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "answer 2"})(),
+    )
+
+    buf = bridge._session_buffers.get("synth-sess", [])
+    assert len(buf) == 2
+    assert buf[0]["user"] == "user q1"
+    assert buf[1]["assistant"] == "answer 2"
+
+
+def test_session_rotation_flushes_synthesis(monkeypatch):
+    """A session_id change synthesises the previous session."""
+    _enable_synth(monkeypatch, min_turns=2)
+    synth_calls = []
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async",
+        lambda *a, **kw: synth_calls.append(kw),
+    )
+    # Filter to the synthesis lane only; the per-turn write path also calls it.
+    def synth_only():
+        return [c for c in synth_calls if c.get("source") == "session_synthesis"]
+
+    # Write two turns in session "a".
+    state_a = {"session_id": "a"}
+    for msg, ans in [("q1", "a1"), ("q2", "a2")]:
+        bridge._remember_turn_state(state_a, msg)
+        bridge._on_post_api_request(
+            session_id="a", finish_reason="stop",
+            assistant_message=type("Message", (), {"content": ans})(),
+        )
+
+    # Start a new session "b" -> rotate flushes "a".
+    bridge._on_pre_llm_call(session_id="b", user_message="new session query")
+
+    synths = synth_only()
+    assert len(synths) == 1
+    kw = synths[0]
+    assert kw.get("source") == "session_synthesis"
+    assert "USER: q1" in kw.get("user_prompt", "")
+    assert "ASSISTANT: a2" in kw.get("user_prompt", "")
+    # The "a" buffer is drained after the flush.
+    assert "a" not in bridge._session_buffers
+
+
+def test_session_rotation_below_min_turns_skips(monkeypatch):
+    """Short sessions below min turns are not synthesised."""
+    _enable_synth(monkeypatch, min_turns=5)
+    synth_calls = []
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async",
+        lambda *a, **kw: synth_calls.append(kw),
+    )
+
+    state_a = {"session_id": "a"}
+    bridge._remember_turn_state(state_a, "q1")
+    bridge._on_post_api_request(
+        session_id="a", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "a1"})(),
+    )
+
+    bridge._on_pre_llm_call(session_id="b", user_message="rotate")
+    synth_calls = [c for c in synth_calls if c.get("source") == "session_synthesis"]
+    assert synth_calls == []
+    # Buffer was still drained (no stale synthesis later).
+    assert "a" not in bridge._session_buffers
+

@@ -4,6 +4,13 @@ BDH Bridge — Bidirectional Hermes ↔ BDH Graph Harness integration.
 Write path: feeds session content to BDH after each API response.
 Read path: provides bdh_query and bdh_stats tools.
 
+v0.7.0:
+  - Session-end synthesis: accumulate written turns per session and, on
+    session-id rotation, flush a single curated synthesis so BDH learns the
+    insight that emerges across the whole conversation, not just per-turn noise
+  - Opt-in via BDH_SESSION_SYNTH_ENABLED=true (default off)
+  - BDH_SESSION_SYNTH_MIN_TURNS (default 3), BDH_SESSION_SYNTH_MAX_CHARS (default 6000)
+
 v0.6.0:
   - Language-agnostic multi-query retrieval bridge normalization (#19)
   - Optional provider-specific arrays `search_queries`/`query_variants` are
@@ -67,7 +74,21 @@ _TURN_STATE_TTL_SECONDS = min(
 _TURN_STATE_MAX_ENTRIES = max(
     int(os.environ.get("BDH_TURN_STATE_MAX_ENTRIES", "1000")), 1
 )
+# Session-end synthesis (v0.7.0): accumulate written turns per session and, on
+# session rotation, send a single curated synthesis so the vault learns the
+# insight that emerges across the whole conversation, not just per-turn noise.
+_SESSION_SYNTH_ENABLED = os.environ.get("BDH_SESSION_SYNTH_ENABLED", "").lower() in (
+    "1", "true", "yes", "on",
+)
+# A session is only worth synthesising once it has at least this many written
+# turns — a 1-turn session is already covered by the per-turn write path.
+_SESSION_SYNTH_MIN_TURNS = int(os.environ.get("BDH_SESSION_SYNTH_MIN_TURNS", "3"))
+# Cap the transcript we feed to the synthesis so a long session cannot blow up
+# the BDH request / neurogenesis context.
+_SESSION_SYNTH_MAX_CHARS = int(os.environ.get("BDH_SESSION_SYNTH_MAX_CHARS", "6000"))
 _turn_states = {}
+_session_buffers = {}  # session_id -> list of {"user": ..., "assistant": ...}
+_last_session_key = None
 _bdh_used_sessions = set()
 _bdh_state_lock = threading.Lock()
 _AUTO_RETRIEVAL_MIN_SCORE = 0.30
@@ -372,6 +393,109 @@ def _pop_turn_state(kwargs):
     with _bdh_state_lock:
         _cleanup_turn_states_locked(time.time())
         return _turn_states.pop(key, None)
+
+
+# ---------------------------------------------------------------------------
+# Session-end synthesis helpers (v0.7.0)
+# ---------------------------------------------------------------------------
+
+def _remember_session_turn(session_id, user_message, assistant_text):
+    """Append one written turn to the per-session synthesis buffer.
+
+    Only called when the per-turn write path actually succeeded, so the
+    synthesis never introduces content that wasn't already fed to BDH.
+    """
+    global _last_session_key
+    if not session_id or not _SESSION_SYNTH_ENABLED:
+        return
+    session_id = str(session_id)
+    with _bdh_state_lock:
+        buf = _session_buffers.setdefault(session_id, [])
+        # Cap buffer length to bound memory on very long sessions.
+        if len(buf) >= 200:
+            buf.pop(0)
+        buf.append({
+            "user": (user_message or "")[:1500],
+            "assistant": (assistant_text or "")[:1500],
+        })
+    # Track the most recent session that actually wrote turns, so rotation
+    # can be detected even when a session ends without a new message arriving.
+    _last_session_key = session_id
+
+
+def _flush_session_synthesis(session_id):
+    """Fire-and-forget a curated session synthesis to BDH, if worth it.
+
+    Runs in a daemon thread like the per-turn write path. The synthesis is a
+    single BDH query whose ``user_prompt`` carries the session transcript; BDH's
+    existing neurogenesis layer then extracts only the durable concepts that
+    emerged across the whole conversation (anti-pollution is preserved by the
+    same durable gate). Source is tagged so it can be traced/discarded.
+    """
+    if not _SESSION_SYNTH_ENABLED or not session_id:
+        return
+    session_id = str(session_id)
+    with _bdh_state_lock:
+        buf = _session_buffers.pop(session_id, None)
+    if not buf:
+        return
+    if len(buf) < _SESSION_SYNTH_MIN_TURNS:
+        logger.debug(
+            f"[bdh-bridge] session {session_id}: only {len(buf)} turn(s), "
+            f"below min {_SESSION_SYNTH_MIN_TURNS} — skipping synthesis"
+        )
+        return
+
+    # Compact the transcript, keeping user questions and assistant answers.
+    lines = []
+    for t in buf:
+        u = t.get("user", "").strip()
+        a = t.get("assistant", "").strip()
+        if not u:
+            continue
+        lines.append(f"USER: {u}")
+        if a:
+            lines.append(f"ASSISTANT: {a}")
+    transcript = "\n".join(lines)
+    if len(transcript) > _SESSION_SYNTH_MAX_CHARS:
+        transcript = transcript[-_SESSION_SYNTH_MAX_CHARS:]
+
+    query = (
+        "Synthesis of an entire agent session. Extract and record any durable "
+        "concept, decision, architecture choice, lesson learned, or reusable "
+        "insight that emerged across the conversation as a whole — not per-turn "
+        "noise. Ignore operational status, diagnostics, and transient tasks."
+    )
+    # _bdh_query_async already spawns its own daemon thread (fire-and-forget),
+    # so call it directly — no nested thread needed.
+    try:
+        _bdh_query_async(
+            query_text=query,
+            user_prompt=transcript,
+            source="session_synthesis",
+        )
+        logger.info(f"[bdh-bridge] session {session_id} synthesis queued ({len(buf)} turns)")
+    except Exception as e:
+        logger.warning(f"[bdh-bridge] session synthesis start error: {e}")
+
+
+def _rotate_session_if_needed(kwargs):
+    """Detect a session boundary via session_id rotation and flush synthesis.
+
+    Called at the top of pre_llm_call, where the new session_id is visible.
+    When the id differs from the previous one, the previous session has ended
+    (CLI exit / reset / expiry rotate the id), so we synthesise it.
+    """
+    global _last_session_key
+    if not _SESSION_SYNTH_ENABLED:
+        return
+    key = _turn_key(kwargs)
+    if key is None:
+        return
+    prev = _last_session_key
+    _last_session_key = str(key)
+    if prev is not None and prev != str(key):
+        _flush_session_synthesis(prev)
 
 
 # ---------------------------------------------------------------------------
@@ -751,6 +875,10 @@ def _on_pre_llm_call(**kwargs):
     failure, it falls back to the mechanical gate + raw user message.
     """
     try:
+        # v0.7.0: detect a session boundary (session_id rotation) before the
+        # new turn starts, so the previous session's synthesis is flushed.
+        _rotate_session_if_needed(kwargs)
+
         # A new user turn starts here. Clear the previous debug marker so the
         # tag cannot leak into the next answer in a long-lived session.
         key = _turn_key(kwargs)
@@ -908,6 +1036,15 @@ def _on_post_api_request(**kwargs):
         user_prompt = text[:1500]
 
         _bdh_query_async(query, user_prompt=user_prompt, source="assistant_response")
+
+        # v0.7.0: remember this successfully-written turn for the session-end
+        # synthesis. Only reached when the write path actually fired, so the
+        # synthesis never includes content BDH didn't already see.
+        _remember_session_turn(
+            kwargs.get("session_id"),
+            user_message,
+            text,
+        )
 
     except Exception as e:
         logger.warning(f"[bdh-bridge] post_api_request hook error: {e}")
