@@ -4,10 +4,14 @@ BDH Bridge — Bidirectional Hermes ↔ BDH Graph Harness integration.
 Write path: feeds session content to BDH after each API response.
 Read path: provides bdh_query and bdh_stats tools.
 
-v0.7.0:
+v0.7.1:
   - Session-end synthesis: accumulate written turns per session and, on
-    session-id rotation, flush a single curated synthesis so BDH learns the
-    insight that emerges across the whole conversation, not just per-turn noise
+    session identity lifecycle (finalize/reset), flush a single curated
+    synthesis so BDH learns the insight that emerges across the whole
+    conversation, not just per-turn noise
+  - Uses Hermes on_session_finalize / on_session_reset hooks instead of
+    process-global session-rotation inference (#14)
+  - Each session buffer is flushed at most once via _flushed_sessions guard
   - Opt-in via BDH_SESSION_SYNTH_ENABLED=true (default off)
   - BDH_SESSION_SYNTH_MIN_TURNS (default 3), BDH_SESSION_SYNTH_MAX_CHARS (default 6000)
 
@@ -88,7 +92,7 @@ _SESSION_SYNTH_MIN_TURNS = int(os.environ.get("BDH_SESSION_SYNTH_MIN_TURNS", "3"
 _SESSION_SYNTH_MAX_CHARS = int(os.environ.get("BDH_SESSION_SYNTH_MAX_CHARS", "6000"))
 _turn_states = {}
 _session_buffers = {}  # session_id -> list of {"user": ..., "assistant": ...}
-_last_session_key = None
+_flushed_sessions = set()  # session_ids already flushed — never double-flush
 _bdh_used_sessions = set()
 _bdh_state_lock = threading.Lock()
 _AUTO_RETRIEVAL_MIN_SCORE = 0.30
@@ -405,7 +409,6 @@ def _remember_session_turn(session_id, user_message, assistant_text):
     Only called when the per-turn write path actually succeeded, so the
     synthesis never introduces content that wasn't already fed to BDH.
     """
-    global _last_session_key
     if not session_id or not _SESSION_SYNTH_ENABLED:
         return
     session_id = str(session_id)
@@ -418,9 +421,6 @@ def _remember_session_turn(session_id, user_message, assistant_text):
             "user": (user_message or "")[:1500],
             "assistant": (assistant_text or "")[:1500],
         })
-    # Track the most recent session that actually wrote turns, so rotation
-    # can be detected even when a session ends without a new message arriving.
-    _last_session_key = session_id
 
 
 def _flush_session_synthesis(session_id):
@@ -435,6 +435,10 @@ def _flush_session_synthesis(session_id):
     if not _SESSION_SYNTH_ENABLED or not session_id:
         return
     session_id = str(session_id)
+    with _bdh_state_lock:
+        if session_id in _flushed_sessions:
+            return
+        _flushed_sessions.add(session_id)
     with _bdh_state_lock:
         buf = _session_buffers.pop(session_id, None)
     if not buf:
@@ -479,23 +483,35 @@ def _flush_session_synthesis(session_id):
         logger.warning(f"[bdh-bridge] session synthesis start error: {e}")
 
 
-def _rotate_session_if_needed(kwargs):
-    """Detect a session boundary via session_id rotation and flush synthesis.
+def _on_session_finalize(**kwargs):
+    """Flush synthesis buffer for a session identity being torn down.
 
-    Called at the top of pre_llm_call, where the new session_id is visible.
-    When the id differs from the previous one, the previous session has ended
-    (CLI exit / reset / expiry rotate the id), so we synthesise it.
+    Hermes fires on_session_finalize when the CLI or gateway tears down an
+    active session identity.  This is the authoritative lifecycle signal for
+    session-end synthesis — not the process-global rotation heuristic.
     """
-    global _last_session_key
-    if not _SESSION_SYNTH_ENABLED:
-        return
-    key = _turn_key(kwargs)
-    if key is None:
-        return
-    prev = _last_session_key
-    _last_session_key = str(key)
-    if prev is not None and prev != str(key):
-        _flush_session_synthesis(prev)
+    try:
+        session_id = kwargs.get("session_id")
+        if session_id:
+            _flush_session_synthesis(session_id)
+    except Exception as e:
+        logger.debug(f"[bdh-bridge] on_session_finalize error: {e}")
+
+
+def _on_session_reset(**kwargs):
+    """Flush synthesis buffer when an old session identity is replaced.
+
+    Hermes fires on_session_reset when the CLI or gateway moves from an old
+    session identity to a new one (e.g. /new, /reset, policy expiry).  The
+    old_session_id marks the session whose buffer must be flushed; the
+    new_session_id is the replacement.  We only flush the OLD session here.
+    """
+    try:
+        old_session_id = kwargs.get("old_session_id")
+        if old_session_id:
+            _flush_session_synthesis(old_session_id)
+    except Exception as e:
+        logger.debug(f"[bdh-bridge] on_session_reset error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -875,10 +891,6 @@ def _on_pre_llm_call(**kwargs):
     failure, it falls back to the mechanical gate + raw user message.
     """
     try:
-        # v0.7.0: detect a session boundary (session_id rotation) before the
-        # new turn starts, so the previous session's synthesis is flushed.
-        _rotate_session_if_needed(kwargs)
-
         # A new user turn starts here. Clear the previous debug marker so the
         # tag cannot leak into the next answer in a long-lived session.
         key = _turn_key(kwargs)
@@ -1225,7 +1237,7 @@ _BDH_STATS_SCHEMA = {
 # Minimal plugin metadata returned for Hermes introspection.
 PLUGIN = {
     "name": "bdh-bridge",
-    "version": "0.6.0",
+    "version": "0.7.1",
     "description": "Bidirectional Hermes ↔ BDH Graph Harness bridge with query rewrite and normalization.",
 }
 
@@ -1240,6 +1252,9 @@ def register(app):
     app.register_hook("post_api_request", _on_post_api_request)
     app.register_hook("post_tool_call", _on_post_tool_call)
     app.register_hook("transform_llm_output", _on_transform_llm_output)
+    # v0.7.1: session lifecycle hooks for synthesis flush (issue #14)
+    app.register_hook("on_session_finalize", _on_session_finalize)
+    app.register_hook("on_session_reset", _on_session_reset)
 
     app.register_tool(
         name="bdh_query",

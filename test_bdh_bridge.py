@@ -959,7 +959,7 @@ def _enable_synth(monkeypatch, min_turns=3):
     monkeypatch.setattr(bridge, "_SESSION_SYNTH_ENABLED", True)
     monkeypatch.setattr(bridge, "_SESSION_SYNTH_MIN_TURNS", min_turns)
     bridge._session_buffers.clear()
-    bridge._last_session_key = None
+    bridge._flushed_sessions.clear()
 
 
 def test_session_buffer_accumulates_written_turns(monkeypatch):
@@ -985,8 +985,8 @@ def test_session_buffer_accumulates_written_turns(monkeypatch):
     assert buf[1]["assistant"] == "answer 2"
 
 
-def test_session_rotation_flushes_synthesis(monkeypatch):
-    """A session_id change synthesises the previous session."""
+def test_session_finalize_flushes_synthesis(monkeypatch):
+    """on_session_finalize synthesises the targeted session."""
     _enable_synth(monkeypatch, min_turns=2)
     synth_calls = []
     monkeypatch.setattr(
@@ -1006,8 +1006,8 @@ def test_session_rotation_flushes_synthesis(monkeypatch):
             assistant_message=type("Message", (), {"content": ans})(),
         )
 
-    # Start a new session "b" -> rotate flushes "a".
-    bridge._on_pre_llm_call(session_id="b", user_message="new session query")
+    # Finalize session "a" -> flushes "a".
+    bridge._on_session_finalize(session_id="a")
 
     synths = synth_only()
     assert len(synths) == 1
@@ -1019,8 +1019,8 @@ def test_session_rotation_flushes_synthesis(monkeypatch):
     assert "a" not in bridge._session_buffers
 
 
-def test_session_rotation_below_min_turns_skips(monkeypatch):
-    """Short sessions below min turns are not synthesised."""
+def test_session_finalize_below_min_turns_skips(monkeypatch):
+    """Short sessions below min turns are not synthesised on finalize."""
     _enable_synth(monkeypatch, min_turns=5)
     synth_calls = []
     monkeypatch.setattr(
@@ -1035,9 +1035,200 @@ def test_session_rotation_below_min_turns_skips(monkeypatch):
         assistant_message=type("Message", (), {"content": "a1"})(),
     )
 
-    bridge._on_pre_llm_call(session_id="b", user_message="rotate")
+    bridge._on_session_finalize(session_id="a")
     synth_calls = [c for c in synth_calls if c.get("source") == "session_synthesis"]
     assert synth_calls == []
     # Buffer was still drained (no stale synthesis later).
     assert "a" not in bridge._session_buffers
+
+
+# ---------------------------------------------------------------------------
+# v0.7.1: issue #14 regression tests — lifecycle hooks, interleaving, no dup
+# ---------------------------------------------------------------------------
+
+def test_interleaved_sessions_no_premature_flush(monkeypatch):
+    """Issue #14: sessions A/B interleaving must not flush a live session.
+
+    Scenario: A turn, B pre-hook, A turn, B pre-hook.  Under the old
+    process-global _last_session_key heuristic, B's pre-hook would flush A
+    each time B appeared.  With lifecycle hooks, A is only flushed when
+    Hermes explicitly fires on_session_finalize or on_session_reset.
+    """
+    _enable_synth(monkeypatch, min_turns=2)
+    # Disable rewrite so the mechanical gate + raw message path is used;
+    # this avoids network dependency and keeps the test deterministic.
+    monkeypatch.setattr(bridge, "_QUERY_REWRITE_ENABLED", False)
+    synth_calls = []
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async",
+        lambda *a, **kw: synth_calls.append(kw),
+    )
+    monkeypatch.setattr(
+        bridge, "_bdh_query_sync",
+        lambda *a, **kw: {
+            "activated_notes": [], "response": "",
+        },
+    )
+
+    def synth_only():
+        return [c for c in synth_calls if c.get("source") == "session_synthesis"]
+
+    # Turn 1 in session A
+    bridge._on_pre_llm_call(session_id="A", user_message="A first question")
+    bridge._on_post_api_request(
+        session_id="A", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "answer A1"})(),
+    )
+
+    # Turn 1 in session B (interleaving)
+    bridge._on_pre_llm_call(session_id="B", user_message="B first question")
+    bridge._on_post_api_request(
+        session_id="B", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "answer B1"})(),
+    )
+
+    # Turn 2 in session A — A is still alive, must NOT be flushed
+    bridge._on_pre_llm_call(session_id="A", user_message="A second question")
+    bridge._on_post_api_request(
+        session_id="A", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "answer A2"})(),
+    )
+
+    # No lifecycle events yet — zero synthesis calls
+    assert synth_only() == []
+
+    # Turn 2 in session B
+    bridge._on_pre_llm_call(session_id="B", user_message="B second question")
+    bridge._on_post_api_request(
+        session_id="B", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "answer B2"})(),
+    )
+
+    # Still no lifecycle events — zero synthesis
+    assert synth_only() == []
+
+    # Now finalize A — only A should flush
+    bridge._on_session_finalize(session_id="A")
+    synths = synth_only()
+    assert len(synths) == 1
+    assert "USER: A first question" in synths[0]["user_prompt"]
+    assert "ASSISTANT: answer A2" in synths[0]["user_prompt"]
+    # B must still be buffered
+    assert "B" in bridge._session_buffers
+
+    # Finalize B — only B flushes
+    bridge._on_session_finalize(session_id="B")
+    synths = synth_only()
+    assert len(synths) == 2
+    assert "USER: B first question" in synths[1]["user_prompt"]
+    assert "ASSISTANT: answer B2" in synths[1]["user_prompt"]
+    # Both drained
+    assert "A" not in bridge._session_buffers
+    assert "B" not in bridge._session_buffers
+
+
+def test_session_reset_flushes_old_session(monkeypatch):
+    """on_session_reset flushes old_session_id, not the new one."""
+    _enable_synth(monkeypatch, min_turns=2)
+    synth_calls = []
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async",
+        lambda *a, **kw: synth_calls.append(kw),
+    )
+
+    def synth_only():
+        return [c for c in synth_calls if c.get("source") == "session_synthesis"]
+
+    state_old = {"session_id": "old"}
+    bridge._remember_turn_state(state_old, "old q1")
+    bridge._on_post_api_request(
+        session_id="old", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "old a1"})(),
+    )
+    bridge._remember_turn_state(state_old, "old q2")
+    bridge._on_post_api_request(
+        session_id="old", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "old a2"})(),
+    )
+
+    # Simulate /new or policy expiry reset
+    bridge._on_session_reset(old_session_id="old", new_session_id="new")
+
+    synths = synth_only()
+    assert len(synths) == 1
+    assert "USER: old q1" in synths[0]["user_prompt"]
+    assert "ASSISTANT: old a2" in synths[0]["user_prompt"]
+    assert "old" not in bridge._session_buffers
+
+    # The new session should not have been flushed
+    bridge._remember_turn_state({"session_id": "new"}, "new q1")
+    bridge._on_post_api_request(
+        session_id="new", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "new a1"})(),
+    )
+    assert "new" in bridge._session_buffers
+    # Only 1 synthesis so far (for "old")
+    assert len(synth_only()) == 1
+
+
+def test_no_duplicate_flush_finalize_then_reset(monkeypatch):
+    """A session finalized and then reset must only flush once."""
+    _enable_synth(monkeypatch, min_turns=2)
+    synth_calls = []
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async",
+        lambda *a, **kw: synth_calls.append(kw),
+    )
+
+    def synth_only():
+        return [c for c in synth_calls if c.get("source") == "session_synthesis"]
+
+    state = {"session_id": "s1"}
+    bridge._remember_turn_state(state, "q1")
+    bridge._on_post_api_request(
+        session_id="s1", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "a1"})(),
+    )
+    bridge._remember_turn_state(state, "q2")
+    bridge._on_post_api_request(
+        session_id="s1", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "a2"})(),
+    )
+
+    # Finalize first
+    bridge._on_session_finalize(session_id="s1")
+    assert len(synth_only()) == 1
+    assert "s1" not in bridge._session_buffers
+
+    # Reset with same old_session_id — must NOT flush again
+    bridge._on_session_reset(old_session_id="s1", new_session_id="s2")
+    assert len(synth_only()) == 1  # still 1, not 2
+
+
+def test_finalize_noop_when_session_never_wrote(monkeypatch):
+    """Finalize on a session that never accumulated turns is a clean noop."""
+    _enable_synth(monkeypatch, min_turns=1)
+    synth_calls = []
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async",
+        lambda *a, **kw: synth_calls.append(kw),
+    )
+    bridge._on_session_finalize(session_id="never-existed")
+    assert [c for c in synth_calls if c.get("source") == "session_synthesis"] == []
+
+
+def test_register_wires_session_lifecycle_hooks():
+    """register() exposes on_session_finalize and on_session_reset."""
+    hooks = []
+
+    class FakeApp:
+        def register_hook(self, name, fn):
+            hooks.append(name)
+
+        def register_tool(self, **kwargs):
+            pass
+
+    bridge.register(FakeApp())
+    assert "on_session_finalize" in hooks
+    assert "on_session_reset" in hooks
 
