@@ -1,0 +1,1454 @@
+{
+  "name": "bdh-query-rewrite-goldenset",
+  "version": 1,
+  "description": "Curated Italian/English evaluation set for BDH rewrite routing. Expected labels are human-authored; anchors are semantic retrieval checks.",
+  "size": 100,
+  "fields": {
+    "should_retrieve": "Whether the current turn should perform BDH read retrieval.",
+    "store_candidate": "Whether the turn contains a durable knowledge candidate for the write path.",
+    "anchors": "Lower-case concepts expected in the rewritten query or retrieved evidence.",
+    "max_sub_queries": "Upper bound for genuinely independent retrieval sub-queries."
+  },
+  "items": [
+    {
+      "id": "q001",
+      "category": "architecture_decision",
+      "message": "Abbiamo deciso di usare Tauri invece di Electron per il companion?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "tauri",
+          "electron",
+          "companion"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q002",
+      "category": "architecture_decision",
+      "message": "La scelta di separare Mission Control dal monorepo Hermes è ormai definitiva.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "mission control",
+          "monorepo",
+          "hermes"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q003",
+      "category": "architecture_decision",
+      "message": "Perché abbiamo scelto un plugin standalone per collegare Hermes a BDH?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "plugin",
+          "standalone",
+          "bdh",
+          "hermes"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q004",
+      "category": "architecture_decision",
+      "message": "La decisione è usare il vault come substrato del grafo e Chroma solo come indice di embedding.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "vault",
+          "grafo",
+          "chroma",
+          "embedding"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q005",
+      "category": "architecture_decision",
+      "message": "Che differenza architetturale c’è tra il read path e il write path del bridge?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "read path",
+          "write path",
+          "bridge"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q006",
+      "category": "architecture_decision",
+      "message": "Abbiamo scelto di non riscrivere le note del vault quando canonicalizziamo gli activation ID.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "canonicalizzazione",
+          "activation id",
+          "vault"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q007",
+      "category": "architecture_decision",
+      "message": "Perché il contesto BDH deve essere ephemeral e non entrare nel system prompt permanente?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "bdh context",
+          "ephemeral",
+          "system prompt"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q008",
+      "category": "architecture_decision",
+      "message": "La federazione delle sorgenti Markdown deve mantenere separati vault ed external source.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "federazione",
+          "markdown",
+          "external source"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q009",
+      "category": "architecture_decision",
+      "message": "Qual è il motivo per cui il bridge usa il messaggio utente come embedding seed?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "embedding seed",
+          "messaggio utente",
+          "echo loop"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q010",
+      "category": "architecture_decision",
+      "message": "Abbiamo deciso che la neurogenesis non deve essere attiva sul vault episodico.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "neurogenesis",
+          "vault episodico"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q011",
+      "category": "debugging_lesson",
+      "message": "Perché il database delle sessioni Hermes si corrompeva dopo il checkpoint?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "database sessioni",
+          "checkpoint",
+          "corruption"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q012",
+      "category": "debugging_lesson",
+      "message": "La causa del crash era l’indice HNSW corrotto nella collection notes di ChromaDB.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "hnsw",
+          "chroma",
+          "collection notes"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q013",
+      "category": "debugging_lesson",
+      "message": "Come abbiamo risolto il loop di reload completo causato dai worktree osservati da Vite?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "vite",
+          "full reload",
+          "worktree"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q014",
+      "category": "debugging_lesson",
+      "message": "La UI rallentava perché il canvas tldraw restava montato e nascosto con display none.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "tldraw",
+          "display none",
+          "input"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q015",
+      "category": "debugging_lesson",
+      "message": "Perché il gateway restituiva 429 e quale fallback locale abbiamo configurato?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "429",
+          "fallback",
+          "oMLX"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q016",
+      "category": "debugging_lesson",
+      "message": "Abbiamo scoperto che il vecchio mlx-lm andava in deadlock con il draft model Qwen MTP.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "mlx-lm",
+          "deadlock",
+          "qwen",
+          "mtp"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q017",
+      "category": "debugging_lesson",
+      "message": "Come abbiamo risolto il problema del token Keychain dopo l’upgrade di CodexBar?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "codexbar",
+          "keychain",
+          "cdhash"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q018",
+      "category": "debugging_lesson",
+      "message": "La causa del WebGL nero su Safari era una cache Three.js corrotta dopo context loss.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "safari",
+          "webgl",
+          "three.js",
+          "context loss"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q019",
+      "category": "debugging_lesson",
+      "message": "Perché una risposta assistant duplicata finiva per rinforzare lo stesso contesto BDH?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "assistant response",
+          "reinforcement",
+          "echo loop"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q020",
+      "category": "debugging_lesson",
+      "message": "Il fix del bug di input era fare unmount del whiteboard quando il drawer veniva chiuso.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "whiteboard",
+          "unmount",
+          "drawer"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q021",
+      "category": "bdh_graph",
+      "message": "Come funziona il consolidamento Hebbiano in BDH?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "hebbian",
+          "consolidamento",
+          "bdh"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q022",
+      "category": "bdh_graph",
+      "message": "Qual è la differenza tra un edge statico e un edge Hebbian?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "static edge",
+          "hebbian edge"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q023",
+      "category": "bdh_graph",
+      "message": "BDH usa il traversal multi-hop solo dopo aver selezionato i seed migliori.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "multi-hop",
+          "seed",
+          "traversal"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q024",
+      "category": "bdh_graph",
+      "message": "Perché il damping degli hub evita che il grafo venga dominato dalle note centrali?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "hub damping",
+          "grafo"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q025",
+      "category": "bdh_graph",
+      "message": "La soglia di rilevanza combina lexical match BM25 e similarità vettoriale.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "bm25",
+          "similarità vettoriale",
+          "soglia"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q026",
+      "category": "bdh_graph",
+      "message": "Come vengono creati i nuovi concetti durante la neurogenesis?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "neurogenesis",
+          "nuovi concetti"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q027",
+      "category": "bdh_graph",
+      "message": "Gli edge Hebbian non sono claim di verità e non devono diventare provenance OKF.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "hebbian",
+          "provenance",
+          "okf"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q028",
+      "category": "bdh_graph",
+      "message": "Cosa succede alla frequenza sinaptica quando la query arriva dal messaggio assistant?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "frequenza sinaptica",
+          "assistant",
+          "dampening"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q029",
+      "category": "bdh_graph",
+      "message": "Il grafo federato risolve gli ID legacy al graph boundary senza modificare il vault.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "grafo federato",
+          "legacy id",
+          "graph boundary"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q030",
+      "category": "bdh_graph",
+      "message": "Come funzionano le query variants nel retrieval ibrido di BDH?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "query variants",
+          "retrieval ibrido",
+          "bdh"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q031",
+      "category": "hermes_runtime",
+      "message": "Qual è il percorso corretto del profilo Hermes attivo?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "hermes home",
+          "profilo"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q032",
+      "category": "hermes_runtime",
+      "message": "Hermes deve rispettare HERMES_HOME invece di usare ~/.hermes hardcoded.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "hermes_home",
+          "path"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q033",
+      "category": "hermes_runtime",
+      "message": "Come si registra correttamente un plugin Hermes e quali hook può usare?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "plugin",
+          "register",
+          "hook"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q034",
+      "category": "hermes_runtime",
+      "message": "Il plugin bdh-hermes-bridge è standalone e viene abilitato in plugins.enabled.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "bdh-hermes-bridge",
+          "standalone",
+          "plugins.enabled"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q035",
+      "category": "hermes_runtime",
+      "message": "Perché il pre_llm_call riceve conversation_history ma non state.db?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "pre_llm_call",
+          "conversation_history",
+          "state.db"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q036",
+      "category": "hermes_runtime",
+      "message": "I plugin Hermes vengono caricati all’avvio e richiedono un restart del gateway dopo le modifiche.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "plugin",
+          "restart",
+          "gateway"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q037",
+      "category": "hermes_runtime",
+      "message": "Come funziona il failover tra provider cloud e modello locale?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "failover",
+          "provider",
+          "modello locale"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q038",
+      "category": "hermes_runtime",
+      "message": "oMLX serve Qwen con MTP e thinking disabilitato per gli output strutturati.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "omlx",
+          "qwen",
+          "mtp",
+          "thinking"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q039",
+      "category": "hermes_runtime",
+      "message": "Quali sono le differenze tra un hook TUI pre_llm_call e uno gateway pre_gateway_dispatch?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "pre_llm_call",
+          "pre_gateway_dispatch",
+          "tui",
+          "gateway"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q040",
+      "category": "hermes_runtime",
+      "message": "La configurazione dei secret appartiene a .env e non ai file versionati del repository.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "secret",
+          ".env",
+          "repository"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q041",
+      "category": "project_context",
+      "message": "Come funziona la persistenza del whiteboard tldraw in Mission Control?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "mission control",
+          "tldraw",
+          "persistenza"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q042",
+      "category": "project_context",
+      "message": "Mission Control deve mostrare il task Done finché l’utente non apre la chat e arriva in fondo.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "done",
+          "chat",
+          "scroll"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q043",
+      "category": "project_context",
+      "message": "Perché l’avatar ESP32 usa sprite RGB565 pre-renderizzati?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "esp32",
+          "rgb565",
+          "sprite"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q044",
+      "category": "project_context",
+      "message": "L’avatar deve dare priorità al lifecycle state rispetto al mood testuale.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "avatar",
+          "lifecycle",
+          "mood"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q045",
+      "category": "project_context",
+      "message": "Come funziona il flusso SSE tra Mission Control e Avatar Companion?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "sse",
+          "mission control",
+          "avatar companion"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q046",
+      "category": "project_context",
+      "message": "Il bridge avatar usa Tailscale per esporre gli eventi SSE al companion mobile.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "tailscale",
+          "sse",
+          "companion"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q047",
+      "category": "project_context",
+      "message": "Qual è la struttura corretta della pagina Task Inspector?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "task inspector",
+          "logs",
+          "events"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q048",
+      "category": "project_context",
+      "message": "Il Kanban usa worktree isolati per evitare conflitti tra worker concorrenti.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "kanban",
+          "worktree",
+          "worker"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q049",
+      "category": "project_context",
+      "message": "Come funzionano le traduzioni i18n tra i cataloghi EN e IT?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "i18n",
+          "catalogo",
+          "en",
+          "it"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q050",
+      "category": "project_context",
+      "message": "La UI di Mission Control non deve contenere stringhe hardcoded fuori dai cataloghi.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "mission control",
+          "i18n",
+          "hardcoded"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q051",
+      "category": "durable_nontechnical",
+      "message": "La strategia del progetto è costruire sistemi self-learning incrementali: ricerca, vault, PoC, fix, estensione.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "self-learning",
+          "ricerca",
+          "vault",
+          "poc"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q052",
+      "category": "durable_nontechnical",
+      "message": "Qual è il metodo che usiamo per trasformare una ricerca in conoscenza riutilizzabile?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "ricerca",
+          "conoscenza riutilizzabile"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q053",
+      "category": "durable_nontechnical",
+      "message": "Preferisco risposte concise in italiano con profondità tecnica e senza teatro di cortesia.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "preferenze",
+          "italiano",
+          "risposte concise"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q054",
+      "category": "durable_nontechnical",
+      "message": "Come distinguiamo una decisione durevole da uno stato temporaneo del lavoro?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "decisione durevole",
+          "stato temporaneo"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q055",
+      "category": "durable_nontechnical",
+      "message": "La vault Core contiene conoscenza operativa, mentre Episodic conserva consolidamenti giornalieri.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "core",
+          "episodic",
+          "vault"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q056",
+      "category": "durable_nontechnical",
+      "message": "Quale ruolo hanno BDH e Honcho nella memoria personale?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "bdh",
+          "honcho",
+          "memoria"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q057",
+      "category": "durable_nontechnical",
+      "message": "La strategia è non promuovere mai un’ipotesi non verificata a decisione.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "ipotesi",
+          "decisione",
+          "verifica"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q058",
+      "category": "durable_nontechnical",
+      "message": "Come documentiamo una lesson learned senza trasformare il vault in un archivio di transcript?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "lesson learned",
+          "transcript",
+          "vault"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q059",
+      "category": "durable_nontechnical",
+      "message": "Il progetto privilegia integrità dei dati e backup prima di ogni operazione distruttiva.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "integrità dati",
+          "backup",
+          "operazione distruttiva"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q060",
+      "category": "durable_nontechnical",
+      "message": "Quali criteri usiamo per decidere se una scoperta merita di entrare nella memoria durevole?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "memoria durevole",
+          "criteri"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q061",
+      "category": "operational_noise",
+      "message": "Ok perfetto, procedi.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": false,
+        "anchors": [],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q062",
+      "category": "operational_noise",
+      "message": "Riavvia il gateway Hermes.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": false,
+        "anchors": [],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q063",
+      "category": "operational_noise",
+      "message": "Pusha il branch quando hai finito.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": false,
+        "anchors": [],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q064",
+      "category": "operational_noise",
+      "message": "Controlla se la porta 8643 è aperta adesso.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": false,
+        "anchors": [],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q065",
+      "category": "operational_noise",
+      "message": "Che ore sono?",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": false,
+        "anchors": [],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q066",
+      "category": "operational_noise",
+      "message": "Grazie mille.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": false,
+        "anchors": [],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q067",
+      "category": "operational_noise",
+      "message": "Esegui i test.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": false,
+        "anchors": [],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q068",
+      "category": "operational_noise",
+      "message": "Fammi vedere lo stato corrente.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": false,
+        "anchors": [],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q069",
+      "category": "operational_noise",
+      "message": "Vai avanti con il prossimo task.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": false,
+        "anchors": [],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q070",
+      "category": "operational_noise",
+      "message": "Ciao, ci sentiamo dopo.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": false,
+        "anchors": [],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q071",
+      "category": "multi_topic",
+      "message": "Abbiamo corretto il fallback BDH→oMLX e ora vorrei capire se il rewrite può usare il contesto della sessione.",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": true,
+        "anchors": [
+          "fallback",
+          "omlx",
+          "rewrite",
+          "contesto"
+        ],
+        "max_sub_queries": 2
+      }
+    },
+    {
+      "id": "q072",
+      "category": "multi_topic",
+      "message": "Confronta la persistenza tldraw con il lifecycle dell’avatar e proponi cosa documentare nel vault.",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": true,
+        "anchors": [
+          "tldraw",
+          "persistenza",
+          "avatar",
+          "lifecycle"
+        ],
+        "max_sub_queries": 2
+      }
+    },
+    {
+      "id": "q073",
+      "category": "multi_topic",
+      "message": "Ieri abbiamo scelto Tauri; oggi dobbiamo verificare se la decisione è coerente con il bridge SSE.",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": true,
+        "anchors": [
+          "tauri",
+          "decisione",
+          "sse",
+          "bridge"
+        ],
+        "max_sub_queries": 2
+      }
+    },
+    {
+      "id": "q074",
+      "category": "multi_topic",
+      "message": "Il bug WebGL è risolto, ma la lezione va collegata alla gestione delle cache di Safari.",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": true,
+        "anchors": [
+          "webgl",
+          "safari",
+          "cache"
+        ],
+        "max_sub_queries": 1
+      }
+    },
+    {
+      "id": "q075",
+      "category": "multi_topic",
+      "message": "Spiegami sia il read path di BDH sia il motivo per cui il write path deve conservare la lingua dell’utente.",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "read path",
+          "write path",
+          "lingua utente"
+        ],
+        "max_sub_queries": 2
+      }
+    },
+    {
+      "id": "q076",
+      "category": "multi_topic",
+      "message": "Se il modello cloud va in rate limit, dobbiamo usare oMLX locale e mantenere comunque l’output JSON.",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": true,
+        "anchors": [
+          "rate limit",
+          "omlx",
+          "json"
+        ],
+        "max_sub_queries": 2
+      }
+    },
+    {
+      "id": "q077",
+      "category": "multi_topic",
+      "message": "Quella decisione di ieri sul vault episodico vale anche per il nuovo progetto Morning Signal?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "vault episodico",
+          "morning signal",
+          "decisione"
+        ],
+        "max_sub_queries": 1
+      }
+    },
+    {
+      "id": "q078",
+      "category": "multi_topic",
+      "message": "Aggiungiamo il problema del context leak alla lesson sul cross-session state e aggiorniamo la documentazione.",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": true,
+        "anchors": [
+          "context leak",
+          "cross-session",
+          "documentation"
+        ],
+        "max_sub_queries": 2
+      }
+    },
+    {
+      "id": "q079",
+      "category": "multi_topic",
+      "message": "Come colleghiamo i concetti di query rewriting, neurogenesis e anti-pollution senza confondere retrieval e learning?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "query rewriting",
+          "neurogenesis",
+          "anti-pollution",
+          "retrieval",
+          "learning"
+        ],
+        "max_sub_queries": 2
+      }
+    },
+    {
+      "id": "q080",
+      "category": "multi_topic",
+      "message": "Abbiamo una decisione di prodotto e una correzione di codice nella stessa frase: come devono essere instradate?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "decisione",
+          "correzione",
+          "routing"
+        ],
+        "max_sub_queries": 2
+      }
+    },
+    {
+      "id": "q001",
+      "category": "context_edge",
+      "message": "Quella scelta che avevamo fatto per il modello locale vale ancora dopo il passaggio a oMLX?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "modello locale",
+          "omlx",
+          "scelta"
+        ],
+        "max_sub_queries": 1
+      }
+    },
+    {
+      "id": "q002",
+      "category": "context_edge",
+      "message": "Confermo che la query originale deve restare disponibile anche quando usiamo una search_query tradotta.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "query originale",
+          "search_query",
+          "tradotta"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q003",
+      "category": "context_edge",
+      "message": "Non è una decisione: sto solo facendo una prova di latenza del bridge.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": false,
+        "anchors": [],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q004",
+      "category": "context_edge",
+      "message": "Ricordami se il contesto BDH viene inserito nel system prompt permanente o solo nel turno corrente.",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "bdh context",
+          "system prompt",
+          "turno"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q005",
+      "category": "context_edge",
+      "message": "La query canonica deve rimanere in italiano mentre la variante di ricerca può essere in inglese.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "query canonica",
+          "italiano",
+          "variante di ricerca",
+          "inglese"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q006",
+      "category": "context_edge",
+      "message": "Se il rewrite aggiunge concetti che non erano nel messaggio, come impediamo che diventino fatti nel vault?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "rewrite",
+          "concetti",
+          "fatti",
+          "vault"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q007",
+      "category": "context_edge",
+      "message": "Abbiamo trovato il problema: il modello produce JSON con thinking attivo e il parser lo rifiuta.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "json",
+          "thinking",
+          "parser"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q008",
+      "category": "context_edge",
+      "message": "Che cosa è cambiato nel contratto tra should_query e should_retrieve?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "should_query",
+          "should_retrieve",
+          "contratto"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q009",
+      "category": "context_edge",
+      "message": "Questo messaggio non deve essere salvato nel vault, è solo una nota temporanea per questa sessione.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": false,
+        "anchors": [],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q010",
+      "category": "context_edge",
+      "message": "Il fallback locale deve mantenere la stessa query e non cambiare il significato della richiesta.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "fallback locale",
+          "query",
+          "significato"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q011",
+      "category": "routing_policy",
+      "message": "Puoi eseguire il benchmark completo e salvarne il report nel branch?",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": false,
+        "anchors": [],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q012",
+      "category": "routing_policy",
+      "message": "Controlla i log di oMLX e dimmi se il server è healthy.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": false,
+        "anchors": [],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q013",
+      "category": "routing_policy",
+      "message": "Fammi un riepilogo delle decisioni prese sul query rewriting di BDH.",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "query rewriting",
+          "bdh",
+          "decisioni"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q014",
+      "category": "routing_policy",
+      "message": "Metti questa decisione nella memoria durevole: il retrieval e il learning sono indipendenti.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "retrieval",
+          "learning",
+          "indipendenti"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q015",
+      "category": "routing_policy",
+      "message": "Non salvare questa frase, serve solo a verificare il comportamento del classificatore.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": false,
+        "anchors": [],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q016",
+      "category": "routing_policy",
+      "message": "Ricordi perché abbiamo scelto di usare conversation_history invece di state.db?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "conversation_history",
+          "state.db"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q017",
+      "category": "routing_policy",
+      "message": "Sì, è quella la decisione definitiva: usiamo oMLX locale per Qwen.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "omlx",
+          "qwen",
+          "decisione definitiva"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q018",
+      "category": "routing_policy",
+      "message": "Crea un commit con queste modifiche e poi fai push.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": false,
+        "anchors": [],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q019",
+      "category": "routing_policy",
+      "message": "Cosa ne pensi del fatto che il rewrite costi diversi secondi per ogni messaggio?",
+      "expected": {
+        "should_retrieve": true,
+        "store_candidate": false,
+        "anchors": [
+          "rewrite",
+          "latenza",
+          "secondi"
+        ],
+        "max_sub_queries": 0
+      }
+    },
+    {
+      "id": "q020",
+      "category": "routing_policy",
+      "message": "Abbiamo chiuso il contratto v2 e il test end-to-end è passato.",
+      "expected": {
+        "should_retrieve": false,
+        "store_candidate": true,
+        "anchors": [
+          "contratto v2",
+          "test end-to-end"
+        ],
+        "max_sub_queries": 0
+      }
+    }
+  ]
+}

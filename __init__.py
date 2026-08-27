@@ -141,7 +141,7 @@ _QUERY_REWRITE_ENABLED = os.environ.get("BDH_QUERY_REWRITE_ENABLED", "").lower()
 )
 _REWRITE_MODEL = os.environ.get("BDH_REWRITE_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash"
 _REWRITE_TIMEOUT = _bounded_int(
-    os.environ.get("BDH_REWRITE_TIMEOUT", "5"), 5, maximum=15
+    os.environ.get("BDH_REWRITE_TIMEOUT", "15"), 15, maximum=15
 )
 _REWRITE_API_URL = (
     os.environ.get("BDH_REWRITE_API_URL", "https://ollama.com/v1").strip().rstrip("/")
@@ -995,6 +995,13 @@ def _rewrite_query(user_message, context_text=""):
         "stream": False,
         # Force JSON response format if the API supports it
         "format": "json",
+        # Qwen/oMLX must not emit hidden reasoning around the JSON contract.
+        # Ollama-compatible cloud endpoints safely ignore this provider-specific
+        # template hint when they do not implement it.
+        "chat_template_kwargs": {
+            "enable_thinking": False,
+            "thinking": False,
+        },
     }
 
     url = f"{_REWRITE_API_URL}/chat/completions"
