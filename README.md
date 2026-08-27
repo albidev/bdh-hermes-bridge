@@ -95,7 +95,7 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 |---|---|---|
 | `BDH_QUERY_REWRITE_ENABLED` | `false` | Feature flag (opt-in) |
 | `BDH_REWRITE_MODEL` | `deepseek-v4-flash` | OpenAI-compatible model for classification + rewrite |
-| `BDH_REWRITE_TIMEOUT` | `5` | LLM call timeout in seconds |
+| `BDH_REWRITE_TIMEOUT` | `15` | LLM call timeout in seconds; sized for local oMLX/Qwen structured output |
 | `BDH_REWRITE_API_URL` | `https://ollama.com/v1` | OpenAI-compatible endpoint (OpenRouter: `https://openrouter.ai/api/v1`) |
 | `BDH_REWRITE_API_KEY` | (from env) | Dedicated API key for the rewrite LLM |
 | `BDH_REWRITE_HTTP_REFERER` | empty | Optional OpenRouter attribution header |
@@ -107,6 +107,22 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 | `BDH_SESSION_SYNTH_ENABLED` | `false` | Opt-in for cross-session synthesis on Hermes session finalization/reset |
 | `BDH_SESSION_SYNTH_MIN_TURNS` | `3` | Minimum written turns before a session is worth synthesising |
 | `BDH_SESSION_SYNTH_MAX_CHARS` | `6000` | Max characters of transcript fed to the synthesis LLM |
+
+## Reproducible query-rewrite benchmark
+
+The curated 100-case goldenset is stored at `benchmarks/query_rewrite_goldenset.json`. The runner exercises only `pre_llm_call` with BDH `learn=false`; it never writes to the vault. Run it in 20-case slices to preserve progress if a provider times out:
+
+```bash
+python3 benchmarks/run_query_rewrite_benchmark.py \
+  --backend baseline --start 0 --count 100 \
+  --output benchmarks/results/baseline-000-100.json
+
+python3 benchmarks/run_query_rewrite_benchmark.py \
+  --backend omlx --start 0 --count 20 --rewrite-timeout 15 \
+  --output benchmarks/results/omlx-15s-000-020.json
+```
+
+The active benchmark uses local oMLX/Qwen (`127.0.0.1:8083`, model `qwen3.8-27b-oq4e-mtp`) or Ollama Cloud when explicitly selected with `--backend cloud`. Reports include total serial wall time, p50/p95 latency, rewrite success, routing accuracy, context hits, and variant bounds.
 
 **Default classification prompt:**
 
@@ -229,7 +245,7 @@ BDH requests are made through a small HTTP helper with configurable base URL and
 
 | Path | Timeout | Attempts | Timeout retry |
 |---|---:|---:|---|
-| Rewrite LLM (classify + rewrite) | 5s | 1 | N/A — falls back to mechanical gate |
+| Rewrite LLM (classify + rewrite) | 15s | 1 | N/A — falls back to mechanical gate |
 | Automatic read hook | 2s | 1 | N/A |
 | Automatic write hook | 30s | 2 total | No |
 | `bdh_query` tool | 30s | 2 total | No |
@@ -256,7 +272,7 @@ pre_llm_call
      │
      ├─ [if BDH_QUERY_REWRITE_ENABLED] ─────────────────────┐
      │   extract context from conversation_history           │
-     │   LLM classify + rewrite (OpenAI-compatible, 5s)      │
+     │   LLM classify + rewrite (OpenAI-compatible, 15s)     │
      │   should_retrieve=false → skip read                    │
      │   store_candidate=false → skip write                   │
      │   should_retrieve=true  → rewritten retrieval query    │

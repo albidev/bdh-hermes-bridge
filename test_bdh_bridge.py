@@ -1633,3 +1633,44 @@ def test_v2_retrieval_variants_are_capped_at_three():
     assert result["search_query"] == "v1"
     assert result["sub_queries"] == ["v2", "v3"]
 
+
+def test_rewrite_request_disables_qwen_thinking_for_structured_output(monkeypatch):
+    """oMLX/Qwen must receive explicit thinking-off template kwargs."""
+    captured = {}
+    body = json.dumps({
+        "choices": [{
+            "message": {
+                "content": json.dumps({
+                    "schema_version": 2,
+                    "should_retrieve": True,
+                    "store_candidate": False,
+                    "query": "test query",
+                    "search_query": "test query",
+                    "sub_queries": [],
+                })
+            }
+        }]
+    })
+
+    class FakeResp:
+        def read(self):
+            return body.encode()
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        captured.update(json.loads(req.data.decode()))
+        return FakeResp()
+
+    monkeypatch.setattr(bridge, "_REWRITE_API_KEY", "local")
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", fake_urlopen)
+    result = bridge._rewrite_query("test query")
+
+    assert result is not None
+    assert captured["chat_template_kwargs"] == {
+        "enable_thinking": False,
+        "thinking": False,
+    }
+

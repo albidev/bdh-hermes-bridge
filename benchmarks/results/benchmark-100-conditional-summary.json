@@ -1,0 +1,62 @@
+{
+  "goldenset_size": 100,
+  "read_only": true,
+  "metrics": {
+    "baseline": {
+      "n": 100,
+      "total_serial_seconds": 8.41,
+      "mean_seconds": 0.084,
+      "p50_seconds": 0.053,
+      "p95_seconds": 0.085,
+      "max_seconds": 1.279,
+      "joint_route_accuracy": 0.15,
+      "should_retrieve_accuracy": 0.54,
+      "store_candidate_accuracy": 0.48,
+      "context_hit_rate_when_retrieval_expected": 0.778,
+      "false_retrieve_rate_when_retrieval_not_expected": 0.836,
+      "store_capture_rate_when_storage_expected": 1.0,
+      "false_store_rate_when_storage_not_expected": 0.852,
+      "anchor_recall_rewrite_or_raw": 0.896
+    },
+    "omlx_local": {
+      "n": 100,
+      "total_serial_seconds": 752.69,
+      "mean_seconds": 7.527,
+      "p50_seconds": 7.425,
+      "p95_seconds": 9.705,
+      "max_seconds": 10.107,
+      "joint_route_accuracy": 0.63,
+      "should_retrieve_accuracy": 0.71,
+      "store_candidate_accuracy": 0.87,
+      "context_hit_rate_when_retrieval_expected": 0.733,
+      "false_retrieve_rate_when_retrieval_not_expected": 0.473,
+      "store_capture_rate_when_storage_expected": 0.872,
+      "false_store_rate_when_storage_not_expected": 0.131,
+      "anchor_recall_rewrite_or_raw": 0.784,
+      "rewrite_success_rate": 1.0,
+      "rewrite_latency_p50": 7.325,
+      "rewrite_latency_p95": 8.738,
+      "variant_bound_accuracy": 0.4
+    },
+    "ollama_cloud": {
+      "n": 100,
+      "total_serial_seconds": 597.748,
+      "mean_seconds": 5.977,
+      "p50_seconds": 5.397,
+      "p95_seconds": 13.042,
+      "max_seconds": 15.8,
+      "joint_route_accuracy": 0.59,
+      "should_retrieve_accuracy": 0.68,
+      "store_candidate_accuracy": 0.86,
+      "context_hit_rate_when_retrieval_expected": 0.778,
+      "false_retrieve_rate_when_retrieval_not_expected": 0.582,
+      "store_capture_rate_when_storage_expected": 0.872,
+      "false_store_rate_when_storage_not_expected": 0.148,
+      "anchor_recall_rewrite_or_raw": 0.779,
+      "rewrite_success_rate": 0.97,
+      "rewrite_latency_p50": 4.92,
+      "rewrite_latency_p95": 10.882,
+      "variant_bound_accuracy": 0.371
+    }
+  }
+}
