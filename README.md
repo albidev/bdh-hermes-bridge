@@ -8,15 +8,15 @@ Bidirectional plugin bridge between [Hermes Agent](https://github.com/NousResear
 
 The plugin connects Hermes' real conversations to BDH's neural knowledge graph and exposes BDH context as native Hermes tools. It learns from actual usage — not fabricated bridge queries.
 
-> **Status:** standalone Hermes plugin, version **0.7.1**.
+> **Status:** standalone Hermes plugin, version **0.8.0**.
 
 ## What it does
 
 ### Automatic read path — BDH → Hermes
 
-At `pre_llm_call`, the bridge captures the original user message and applies a conservative eligibility gate. It automatically retrieves context only for substantive technical or episodic messages — for example debugging, architecture, configuration, project questions, or references to earlier decisions. Casual messages such as “ciao”, “grazie”, and “ok” are skipped.
+At `pre_llm_call`, the bridge captures the original user message and applies a conservative eligibility gate. It automatically retrieves context for substantive knowledge messages — for example debugging, architecture, configuration, project questions, decisions, or references to earlier context. Casual messages such as “ciao”, “grazie”, and “ok” are skipped.
 
-When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge first asks a small LLM to classify and optionally rewrite the message. The **read path** uses `search_query` (an optimized/English/keyword form when helpful); the **write path** always keeps the original user-language `query`. If the LLM says the message is operational noise, both paths are skipped.
+When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge first asks a small LLM to classify and optionally rewrite the message. The **read path** uses `search_query` (an optimized/English/keyword form when helpful); the **write path** uses the canonical user-language `query`. Retrieval and storage are independent decisions: a turn can be `retrieve_only`, `store_only`, `retrieve_and_store`, or `skip`.
 
 Automatic retrieval sends:
 
@@ -49,28 +49,44 @@ The original user message remains the primary signal. BDH context supports it; i
 
 Automatic retrieval uses the vault's Hybrid index: Chroma cosine KNN plus BM25 lexical scoring. BDH exposes raw routing metadata (`vector_top_score`, `bm25_top_score`, `bm25_matched_terms`, `hybrid_top_score`, and `hybrid_margin`) before graph expansion. The bridge injects context when there are at least two lexical term matches or a strong semantic vector score. This is experimental routing logic; it does not modify Hebbian state.
 
-### Query classification + rewrite pipeline (v0.5.0, opt-in)
+### Query classification + rewrite pipeline (v0.8.0, opt-in)
 
-When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessing step before BDH retrieval. A single LLM call combines **classification** (should this message query the graph?), **rewrite** (`query` in the user's language), and an optional **search query** (`search_query`) that can be tuned for a specific vault.
+When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessing step before BDH retrieval. A single LLM call combines **routing** (`should_retrieve` and `store_candidate`), **rewrite** (`query` in the user's language), and an optional **search query** (`search_query`) that can be tuned for a specific vault.
 
-**Why:** colloquial messages are often poor embedding seeds. The rewrite step converts them into concise, search-oriented representations. The optional `search_query` lets the bridge adapt to vaults that are mostly English even when the user speaks another language. The classification gate also prevents transient operational noise from polluting the vault — both read and write paths are skipped when the LLM says the message contains no knowledge.
+**Why:** colloquial messages are often poor embedding seeds. The rewrite step converts them into concise, search-oriented representations. The optional `search_query` lets the bridge adapt to vaults that are mostly English even when the user speaks another language. Independent routing prevents transient operational noise from polluting the vault while still allowing a durable decision to be stored without performing a read.
 
-**Read vs write path:**
-- **Read** (`pre_llm_call` automatic retrieval): uses `search_query` if provided; otherwise falls back to `query`.
-- **Write** (`post_api_request` learning): always uses `query` (the user's language/intent), never `search_query`, so BDH learns from real user language rather than translated artifacts.
+**Routing contract (`schema_version: 2`):**
+
+```json
+{
+  "schema_version": 2,
+  "should_retrieve": true,
+  "store_candidate": true,
+  "query": "canonical user-language intent",
+  "search_query": "optional retrieval-only query",
+  "sub_queries": [],
+  "knowledge_types": ["decision"],
+  "confidence": 0.0
+}
+```
+
+- **Read** (`pre_llm_call` automatic retrieval): only when `should_retrieve=true`; uses `search_query` if provided, otherwise `query`.
+- **Write** (`post_api_request` learning): only when `store_candidate=true`; uses `query`, never retrieval-only variants.
+- **Compatibility:** legacy `should_query` payloads are accepted and map to both flags, but new providers must emit schema v2.
+- **Safety:** malformed v2 booleans are rejected; values such as the string `"false"` never fail open to `true`.
 
 **The graph is domain-agnostic:** the classification prompt describes the vault as storing concepts, decisions, architecture choices, project context, lessons learned, strategies, and factual knowledge — not limited to technical content.
 
 **Context recovery:** Hermes passes `conversation_history` in the `pre_llm_call` hook kwargs. The bridge extracts the last N messages (default 6, configurable), truncates each to 200 chars, and feeds them to the rewrite LLM. No state.db access needed.
 
-**Fallback:** if the rewrite LLM times out, returns invalid JSON, or is unreachable, the bridge falls back to the mechanical gate + raw user message (v0.4.0 behavior). The pipeline is an enhancement, never a blocker.
+**Fallback:** if the rewrite LLM times out, returns invalid JSON, or is unreachable, the bridge falls back to the mechanical gate + raw user message (v0.4.0 behavior). The pipeline is an enhancement, never a blocker. When a valid v2 response is available, retrieval and storage follow their independent flags.
 
 **Write path consistency:** the user-language `query` is stored and reused as the embedding seed in `post_api_request`. This ensures the write signal reflects real user intent.
 
 **Custom prompt override:** the default prompt is embedded, but you can point to an external Markdown file with `BDH_REWRITE_PROMPT_FILE`. The file is reloaded on every call, so edits take effect without a plugin restart. The default output schema still applies:
 
 ```json
-{"should_query": true|false, "query": "...", "search_query": "...", "sub_queries": ["...", "..."]}
+{"schema_version": 2, "should_retrieve": true|false, "store_candidate": true|false, "query": "...", "search_query": "...", "sub_queries": ["..."], "knowledge_types": [], "confidence": 0.0}
 ```
 
 **Configuration:**
@@ -87,6 +103,7 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 | `BDH_REWRITE_PROMPT_FILE` | empty | Path to custom Markdown prompt file |
 | `BDH_CONTEXT_MESSAGES_N` | `6` | Number of conversation_history messages to include |
 | `BDH_CONTEXT_MSG_MAX_CHARS` | `200` | Max chars per context message |
+| `BDH_REWRITE_MAX_VARIANTS` | `10` (v2 cap: `3`) | Legacy/provider variant bound; v2 never sends more than 3 retrieval variants |
 | `BDH_SESSION_SYNTH_ENABLED` | `false` | Opt-in for cross-session synthesis on Hermes session finalization/reset |
 | `BDH_SESSION_SYNTH_MIN_TURNS` | `3` | Minimum written turns before a session is worth synthesising |
 | `BDH_SESSION_SYNTH_MAX_CHARS` | `6000` | Max characters of transcript fed to the synthesis LLM |
@@ -101,17 +118,16 @@ knowledge about the user's projects and workflow. It does NOT
 store operational commands, system diagnostics, or transient
 task status.
 
-Given the user message and recent conversation context, decide:
-1. Does this message contain knowledge that connects to other
-   concepts already in the graph?
-2. If yes, rewrite it as a clear, search-friendly query.
-3. If the message covers multiple topics, generate sub-queries.
-4. Optionally produce a search_query field with English/technical
-   keywords if you believe it will improve recall; otherwise leave
-   it equal to query.
+Given the current user message and recent conversation context, decide:
+1. Does this message require knowledge retrieval from the graph?
+2. Does this interaction contain a durable knowledge candidate worth storing?
+3. If retrieval is useful, rewrite the query as a clear, search-friendly query.
+4. Generate at most three sub-queries only for genuinely independent topics.
+5. Use context only to resolve references and omitted subjects. Never invent facts.
+6. Keep `search_query` retrieval-only and `query` as the canonical user-language intent.
 
-Reply as JSON:
-{"should_query": true|false, "query": "...", "search_query": "...", "sub_queries": ["...", "..."]}
+Reply as JSON only:
+{"schema_version": 2, "should_retrieve": true|false, "store_candidate": true|false, "query": "...", "search_query": "...", "sub_queries": ["..."], "knowledge_types": [], "confidence": 0.0}
 ```
 
 ### Cron isolation — deny by default
@@ -241,8 +257,9 @@ pre_llm_call
      ├─ [if BDH_QUERY_REWRITE_ENABLED] ─────────────────────┐
      │   extract context from conversation_history           │
      │   LLM classify + rewrite (OpenAI-compatible, 5s)      │
-     │   should_query=false → skip read AND write             │
-     │   should_query=true  → rewritten query                │
+     │   should_retrieve=false → skip read                    │
+     │   store_candidate=false → skip write                   │
+     │   should_retrieve=true  → rewritten retrieval query    │
      │   LLM failure → fallback to mechanical gate + raw     │
      │ ──────────────────────────────────────────────────────┘
      │
@@ -321,7 +338,7 @@ Plugins are loaded at process startup. Editing `__init__.py` without restarting 
 
 ```yaml
 name: bdh-hermes-bridge
-version: 0.7.1
+version: 0.8.0
 kind: standalone
 provides_hooks:
   - pre_llm_call
