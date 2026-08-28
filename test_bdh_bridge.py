@@ -15,6 +15,13 @@ assert _SPEC.loader is not None
 _SPEC.loader.exec_module(bridge)
 
 
+def test_default_rewrite_prompt_contains_routing_few_shot_examples():
+    prompt = bridge._DEFAULT_REWRITE_SYSTEM_PROMPT
+    assert "Few-shot examples for routing calibration." in prompt
+    assert "Aggiungiamo query classification e routing" in prompt
+    assert '"should_retrieve":false,"store_candidate":true' in prompt
+
+
 def test_gating_skips_casual_messages():
     assert bridge._should_auto_retrieve("ciao") is False
     assert bridge._should_auto_retrieve("Grazie!") is False

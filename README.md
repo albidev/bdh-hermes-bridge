@@ -83,7 +83,7 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 
 **Write path consistency:** the user-language `query` is stored and reused as the embedding seed in `post_api_request`. This ensures the write signal reflects real user intent.
 
-**Custom prompt override:** the default prompt is embedded, but you can point to an external Markdown file with `BDH_REWRITE_PROMPT_FILE`. The file is reloaded on every call, so edits take effect without a plugin restart. The default output schema still applies:
+**Custom prompt override:** the default prompt is embedded and includes eight sanitized few-shot routing examples covering operational noise, knowledge questions, architecture questions, durable decisions/proposals, project-status retrieval, and unrelated links. You can point to an external Markdown file with `BDH_REWRITE_PROMPT_FILE`; that file replaces the embedded prompt and is reloaded on every call. The default output schema still applies:
 
 ```json
 {"schema_version": 2, "should_retrieve": true|false, "store_candidate": true|false, "query": "...", "search_query": "...", "sub_queries": ["..."], "knowledge_types": [], "confidence": 0.0}
@@ -94,8 +94,8 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 | Env var | Default | Purpose |
 |---|---|---|
 | `BDH_QUERY_REWRITE_ENABLED` | `false` | Feature flag (opt-in) |
-| `BDH_REWRITE_MODEL` | `deepseek-v4-flash` | OpenAI-compatible model for classification + rewrite |
-| `BDH_REWRITE_TIMEOUT` | `15` | LLM call timeout in seconds; sized for local oMLX/Qwen structured output |
+| `BDH_REWRITE_MODEL` | `deepseek-v4-flash:cloud` | Ollama Cloud model for classification + rewrite |
+| `BDH_REWRITE_TIMEOUT` | `15` | LLM call timeout in seconds; fallback applies on timeout |
 | `BDH_REWRITE_API_URL` | `https://ollama.com/v1` | OpenAI-compatible endpoint (OpenRouter: `https://openrouter.ai/api/v1`) |
 | `BDH_REWRITE_API_KEY` | (from env) | Dedicated API key for the rewrite LLM |
 | `BDH_REWRITE_HTTP_REFERER` | empty | Optional OpenRouter attribution header |
