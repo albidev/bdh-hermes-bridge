@@ -1,0 +1,534 @@
+{
+  "backend": "cloud",
+  "endpoint": "https://ollama.com/v1",
+  "model": "deepseek-v4-flash:cloud",
+  "goldenset_slice": {
+    "start": "q081",
+    "count": 20
+  },
+  "read_only": true,
+  "summary": {
+    "n": 20,
+    "errors": 0,
+    "mean_seconds": 3.613,
+    "p50_seconds": 2.716,
+    "p95_seconds": 5.773,
+    "max_seconds": 15.586,
+    "context_hits": 9,
+    "context_hit_rate": 0.45,
+    "route_accuracy": 0.6,
+    "anchor_recall_mean": 0.976,
+    "variant_bound_accuracy": 0.4,
+    "by_category": {
+      "context_edge": {
+        "n": 10,
+        "mean_seconds": 3.663,
+        "context_hits": 4
+      },
+      "routing_policy": {
+        "n": 10,
+        "mean_seconds": 3.564,
+        "context_hits": 5
+      }
+    },
+    "rewrite_successes": 19,
+    "rewrite_success_rate": 0.95
+  },
+  "rows": [
+    {
+      "id": "q081",
+      "category": "context_edge",
+      "elapsed_seconds": 3.956,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Quella scelta che avevamo fatto per il modello locale vale ancora dopo il passaggio a oMLX?",
+        "search_query": "decisione modello locale validità dopo passaggio oMLX",
+        "sub_queries": [
+          "scelta modello locale decisione",
+          "passaggio a oMLX architettura"
+        ],
+        "knowledge_types": [
+          "decision",
+          "architecture_choice"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 3.86
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q082",
+      "category": "context_edge",
+      "elapsed_seconds": 4.345,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": true,
+        "should_query": false,
+        "query": "Confermo che la query originale deve restare disponibile anche quando usiamo una search_query tradotta.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [
+          "decision",
+          "architecture_choice"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 4.345
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q083",
+      "category": "context_edge",
+      "elapsed_seconds": 1.947,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Non è una decisione: sto solo facendo una prova di latenza del bridge.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 1.947
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q084",
+      "category": "context_edge",
+      "elapsed_seconds": 3.59,
+      "context_injected": true,
+      "context_chars": 540,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Il contesto BDH viene inserito nel system prompt permanente o solo nel turno corrente?",
+        "search_query": "BDH context system prompt permanent current turn injection",
+        "sub_queries": [
+          "BDH contesto system prompt permanente",
+          "BDH context injection turno corrente"
+        ],
+        "knowledge_types": [
+          "architecture_choice",
+          "decision"
+        ],
+        "confidence": 0.6,
+        "provider_elapsed_seconds": 3.485
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q085",
+      "category": "context_edge",
+      "elapsed_seconds": 5.144,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "La query canonica deve rimanere in italiano mentre la variante di ricerca può essere in inglese.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 5.144
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q086",
+      "category": "context_edge",
+      "elapsed_seconds": 5.256,
+      "context_injected": true,
+      "context_chars": 557,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Come impedire che il rewrite aggiunga concetti che diventano fatti nel vault?",
+        "search_query": "prevent rewrite from adding concepts to vault knowledge integrity",
+        "sub_queries": [
+          "rewrite process vault pollution prevention",
+          "rules for storing facts from rewritten queries"
+        ],
+        "knowledge_types": [
+          "design_decision",
+          "strategy"
+        ],
+        "confidence": 0.85,
+        "provider_elapsed_seconds": 5.151
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q087",
+      "category": "context_edge",
+      "elapsed_seconds": 5.102,
+      "context_injected": true,
+      "context_chars": 560,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Abbiamo trovato il problema: il modello produce JSON con thinking attivo e il parser lo rifiuta.",
+        "search_query": "model produces JSON with thinking active parser rejects",
+        "sub_queries": [
+          "model JSON thinking parser rejection",
+          "BDH integration bridge issues"
+        ],
+        "knowledge_types": [
+          "problem",
+          "lesson_learned",
+          "technical_issue"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 5.004
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q088",
+      "category": "context_edge",
+      "elapsed_seconds": 3.192,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Che cosa è cambiato nel contratto tra should_query e should_retrieve?",
+        "search_query": "contract change should_query should_retrieve",
+        "sub_queries": [
+          "should_query should_retrieve contract evolution",
+          "modifica contratto should_query should_retrieve"
+        ],
+        "knowledge_types": [
+          "architecture_decision",
+          "contract",
+          "change"
+        ],
+        "confidence": 0.7,
+        "provider_elapsed_seconds": 2.649
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q089",
+      "category": "context_edge",
+      "elapsed_seconds": 1.96,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Questo messaggio non deve essere salvato nel vault, è solo una nota temporanea per questa sessione.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 1.0,
+        "provider_elapsed_seconds": 1.96
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q090",
+      "category": "context_edge",
+      "elapsed_seconds": 2.139,
+      "context_injected": true,
+      "context_chars": 541,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Il fallback locale deve mantenere la stessa query e non cambiare il significato della richiesta.",
+        "search_query": "fallback locale query BDH bridge design decision",
+        "sub_queries": [
+          "BDH integration fallback behavior",
+          "bridge query preservation design principle"
+        ],
+        "knowledge_types": [
+          "design_decision",
+          "architecture_choice"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 2.0
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q091",
+      "category": "routing_policy",
+      "elapsed_seconds": 15.586,
+      "context_injected": true,
+      "context_chars": 533,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q092",
+      "category": "routing_policy",
+      "elapsed_seconds": 2.174,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Controlla i log di oMLX e dimmi se il server è healthy.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 2.174
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q093",
+      "category": "routing_policy",
+      "elapsed_seconds": 2.141,
+      "context_injected": true,
+      "context_chars": 511,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Riepilogo delle decisioni prese sul query rewriting di BDH",
+        "search_query": "BDH query rewriting decisioni",
+        "sub_queries": [
+          "decisioni query rewriting BDH",
+          "BDH bridge query rewriting architettura"
+        ],
+        "knowledge_types": [
+          "decisions",
+          "architecture_choices"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 2.038
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q094",
+      "category": "routing_policy",
+      "elapsed_seconds": 2.3,
+      "context_injected": true,
+      "context_chars": 521,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Decisione: il retrieval e il learning sono indipendenti (contesto: integrazione BDH e bridge)",
+        "search_query": "retrieval learning indipendenti decisione BDH bridge",
+        "sub_queries": [
+          "retrieval e learning indipendenti",
+          "integrazione BDH bridge decisioni"
+        ],
+        "knowledge_types": [
+          "decision",
+          "architecture"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 2.148
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q095",
+      "category": "routing_policy",
+      "elapsed_seconds": 2.027,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Non salvare questa frase, serve solo a verificare il comportamento del classificatore.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 1.0,
+        "provider_elapsed_seconds": 2.027
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q096",
+      "category": "routing_policy",
+      "elapsed_seconds": 1.518,
+      "context_injected": true,
+      "context_chars": 516,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Perché abbiamo scelto di usare conversation_history invece di state.db?",
+        "search_query": "conversation_history vs state.db decision rationale architecture choice",
+        "sub_queries": [
+          "motivazione scelta conversation_history al posto di state.db",
+          "decisione architetturale conversation_history state.db"
+        ],
+        "knowledge_types": [
+          "decision",
+          "architecture_choice"
+        ],
+        "confidence": 0.92,
+        "provider_elapsed_seconds": 1.413
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q097",
+      "category": "routing_policy",
+      "elapsed_seconds": 3.133,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Decisione definitiva: usare oMLX locale per Qwen",
+        "search_query": "oMLX locale Qwen decisione",
+        "sub_queries": [
+          "oMLX locale per Qwen",
+          "Qwen modello locale"
+        ],
+        "knowledge_types": [
+          "decision",
+          "architecture"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 2.374
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q098",
+      "category": "routing_policy",
+      "elapsed_seconds": 1.577,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Crea un commit con queste modifiche e poi fai push.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 1.577
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q099",
+      "category": "routing_policy",
+      "elapsed_seconds": 1.901,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Il rewrite costa diversi secondi per ogni messaggio",
+        "search_query": "rewrite performance seconds per message BDH bridge",
+        "sub_queries": [
+          "rewrite cost per message performance",
+          "BDH integration bridge rewrite latency"
+        ],
+        "knowledge_types": [
+          "performance",
+          "architecture",
+          "decision",
+          "lesson_learned"
+        ],
+        "confidence": 0.7,
+        "provider_elapsed_seconds": 1.827
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q100",
+      "category": "routing_policy",
+      "elapsed_seconds": 3.281,
+      "context_injected": true,
+      "context_chars": 501,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Abbiamo chiuso il contratto v2 e il test end-to-end è passato.",
+        "search_query": "contratto v2 test end-to-end passato",
+        "sub_queries": [
+          "contratto v2 test end-to-end"
+        ],
+        "knowledge_types": [
+          "project_status",
+          "milestone"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 3.125
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    }
+  ],
+  "rewrite_timeout_seconds": 15,
+  "goldenset": {
+    "path": "/Users/albi/Projects/bdh-hermes-bridge-query-contract/benchmarks/query_rewrite_goldenset.json",
+    "version": 2,
+    "size": 100,
+    "slice_start_index": 80,
+    "slice_count": 20
+  }
+}

@@ -1,0 +1,544 @@
+{
+  "backend": "cloud",
+  "endpoint": "https://ollama.com/v1",
+  "model": "deepseek-v4-flash:cloud",
+  "goldenset_slice": {
+    "start": "q001",
+    "count": 20
+  },
+  "read_only": true,
+  "summary": {
+    "n": 20,
+    "errors": 0,
+    "mean_seconds": 4.926,
+    "p50_seconds": 3.619,
+    "p95_seconds": 15.23,
+    "max_seconds": 16.373,
+    "context_hits": 17,
+    "context_hit_rate": 0.85,
+    "route_accuracy": 0.55,
+    "anchor_recall_mean": 0.917,
+    "variant_bound_accuracy": 0.3,
+    "by_category": {
+      "architecture_decision": {
+        "n": 10,
+        "mean_seconds": 2.998,
+        "context_hits": 9
+      },
+      "debugging_lesson": {
+        "n": 10,
+        "mean_seconds": 6.855,
+        "context_hits": 8
+      }
+    },
+    "rewrite_successes": 18,
+    "rewrite_success_rate": 0.9
+  },
+  "rows": [
+    {
+      "id": "q001",
+      "category": "architecture_decision",
+      "elapsed_seconds": 2.001,
+      "context_injected": true,
+      "context_chars": 483,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Abbiamo deciso di usare Tauri invece di Electron per il companion?",
+        "search_query": "Tauri vs Electron companion framework decision",
+        "sub_queries": [
+          "decision on Tauri instead of Electron for companion",
+          "companion app framework choice architecture"
+        ],
+        "knowledge_types": [
+          "decision",
+          "architecture_choice"
+        ],
+        "confidence": 0.92,
+        "provider_elapsed_seconds": 1.889
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q002",
+      "category": "architecture_decision",
+      "elapsed_seconds": 4.048,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": true,
+        "should_query": false,
+        "query": "La scelta di separare Mission Control dal monorepo Hermes è ormai definitiva.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [
+          "decision",
+          "architecture"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 4.048
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q003",
+      "category": "architecture_decision",
+      "elapsed_seconds": 4.965,
+      "context_injected": true,
+      "context_chars": 502,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Perché abbiamo scelto un plugin standalone per collegare Hermes a BDH?",
+        "search_query": "reason standalone plugin Hermes BDH integration",
+        "sub_queries": [],
+        "knowledge_types": [
+          "decision",
+          "architecture_choice"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 4.822
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q004",
+      "category": "architecture_decision",
+      "elapsed_seconds": 2.848,
+      "context_injected": true,
+      "context_chars": 603,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "La decisione è usare il vault come substrato del grafo e Chroma solo come indice di embedding.",
+        "search_query": "vault graph substrate Chroma embedding index decision",
+        "sub_queries": [
+          "vault as graph substrate and Chroma as embedding index decision",
+          "BDH integration bridge context"
+        ],
+        "knowledge_types": [
+          "decision",
+          "architecture",
+          "integration"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 2.745
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q005",
+      "category": "architecture_decision",
+      "elapsed_seconds": 1.693,
+      "context_injected": true,
+      "context_chars": 517,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Che differenza architetturale c’è tra il read path e il write path del bridge?",
+        "search_query": "bridge read path write path architectural difference",
+        "sub_queries": [
+          "bridge read path vs write path architecture"
+        ],
+        "knowledge_types": [
+          "architecture",
+          "decisions"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 1.548
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q006",
+      "category": "architecture_decision",
+      "elapsed_seconds": 3.325,
+      "context_injected": true,
+      "context_chars": 534,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Abbiamo scelto di non riscrivere le note del vault quando canonicalizziamo gli activation ID.",
+        "search_query": "canonicalization activation IDs vault notes rewrite decision",
+        "sub_queries": [
+          "Come gestiamo la canonicalizzazione degli activation ID e le note del vault?"
+        ],
+        "knowledge_types": [
+          "decision",
+          "architecture_choice"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 3.186
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q007",
+      "category": "architecture_decision",
+      "elapsed_seconds": 3.018,
+      "context_injected": true,
+      "context_chars": 543,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Perché il contesto BDH deve essere ephemeral e non entrare nel system prompt permanente?",
+        "search_query": "BDH ephemeral context system prompt decision rationale",
+        "sub_queries": [
+          "BDH integration context ephemeral design",
+          "ephemeral context vs permanent system prompt architecture"
+        ],
+        "knowledge_types": [
+          "decision",
+          "architecture",
+          "lesson"
+        ],
+        "confidence": 0.8,
+        "provider_elapsed_seconds": 2.866
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q008",
+      "category": "architecture_decision",
+      "elapsed_seconds": 2.915,
+      "context_injected": true,
+      "context_chars": 514,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "La federazione delle sorgenti Markdown deve mantenere separati vault ed external source.",
+        "search_query": "federazione sorgenti Markdown separazione vault external source",
+        "sub_queries": [
+          "federazione sorgenti Markdown vault external source",
+          "BDH bridge integrazione vault separazione"
+        ],
+        "knowledge_types": [
+          "architecture_decision",
+          "design_principle",
+          "project_context"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 2.784
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q009",
+      "category": "architecture_decision",
+      "elapsed_seconds": 1.908,
+      "context_injected": true,
+      "context_chars": 481,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Perché il bridge usa il messaggio utente come embedding seed?",
+        "search_query": "bridge embedding seed user message rationale design decision",
+        "sub_queries": [
+          "bridge embedding seed rationale",
+          "bridge design decision user message context preservation"
+        ],
+        "knowledge_types": [
+          "decision",
+          "architecture_choice",
+          "rationale"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 1.635
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q010",
+      "category": "architecture_decision",
+      "elapsed_seconds": 3.256,
+      "context_injected": true,
+      "context_chars": 521,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Abbiamo deciso che la neurogenesis non deve essere attiva sul vault episodico",
+        "search_query": "neurogenesis vault episodico decisione",
+        "sub_queries": [
+          "neurogenesis policy vault episodico",
+          "vault episodico integrazione BDH bridge"
+        ],
+        "knowledge_types": [
+          "decision",
+          "architecture_choice"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 1.997
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q011",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 3.275,
+      "context_injected": true,
+      "context_chars": 487,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Perché il database delle sessioni Hermes si corrompeva dopo il checkpoint?",
+        "search_query": "Hermes session database corruption checkpoint cause",
+        "sub_queries": [
+          "Hermes session database corruption after checkpoint reason"
+        ],
+        "knowledge_types": [
+          "lessons_learned",
+          "architecture_choice"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 3.188
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q012",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 3.913,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": true,
+        "should_query": false,
+        "query": "La causa del crash era l’indice HNSW corrotto nella collection notes di ChromaDB.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [
+          "root_cause",
+          "technical_fact",
+          "ChromaDB",
+          "HNSW"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 3.913
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q013",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 2.609,
+      "context_injected": true,
+      "context_chars": 545,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Come abbiamo risolto il loop di reload completo causato dai worktree osservati da Vite?",
+        "search_query": "Vite worktree reload loop solution",
+        "sub_queries": [
+          "Vite worktree reload loop fix",
+          "worktree Vite full reload problem"
+        ],
+        "knowledge_types": [
+          "decision",
+          "lesson_learned",
+          "architecture_choice"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 2.119
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q014",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 4.522,
+      "context_injected": true,
+      "context_chars": 543,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "La UI rallentava perché il canvas tldraw restava montato e nascosto con display none.",
+        "search_query": "tldraw canvas performance display none mount",
+        "sub_queries": [
+          "tldraw canvas performance issue display none",
+          "UI performance optimization canvas mount"
+        ],
+        "knowledge_types": [
+          "lessons_learned",
+          "performance_optimization"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 4.392
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q015",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 15.17,
+      "context_injected": true,
+      "context_chars": 520,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q016",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 6.866,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": true,
+        "should_query": false,
+        "query": "Abbiamo scoperto che il vecchio mlx-lm andava in deadlock con il draft model Qwen MTP.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [
+          "lesson_learned"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 6.866
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q017",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 6.028,
+      "context_injected": true,
+      "context_chars": 613,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Come abbiamo risolto il problema del token Keychain dopo l'upgrade di CodexBar?",
+        "search_query": "Keychain token problem CodexBar upgrade solution",
+        "sub_queries": [
+          "Keychain token issue after CodexBar upgrade resolved"
+        ],
+        "knowledge_types": [
+          "decision",
+          "lesson_learned",
+          "problem_solution"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 5.617
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q018",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 4.931,
+      "context_injected": true,
+      "context_chars": 575,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "La causa del WebGL nero su Safari era una cache Three.js corrotta dopo context loss.",
+        "search_query": "WebGL nero Safari Three.js cache corrotta context loss",
+        "sub_queries": [
+          "Three.js context loss Safari WebGL",
+          "WebGL black screen Safari cache issue"
+        ],
+        "knowledge_types": [
+          "lesson_learned",
+          "technical_issue",
+          "root_cause"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 4.836
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q019",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 4.862,
+      "context_injected": true,
+      "context_chars": 523,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Perché una risposta assistant duplicata finiva per rinforzare lo stesso contesto BDH?",
+        "search_query": "duplicate assistant response reinforce BDH context",
+        "sub_queries": [
+          "duplicate response effect on BDH context reinforcement"
+        ],
+        "knowledge_types": [
+          "concept",
+          "lesson_learned"
+        ],
+        "confidence": 0.7,
+        "provider_elapsed_seconds": 3.51
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q020",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 16.373,
+      "context_injected": true,
+      "context_chars": 547,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    }
+  ],
+  "rewrite_timeout_seconds": 15,
+  "goldenset": {
+    "path": "/Users/albi/Projects/bdh-hermes-bridge-query-contract/benchmarks/query_rewrite_goldenset.json",
+    "version": 2,
+    "size": 100,
+    "slice_start_index": 0,
+    "slice_count": 20
+  }
+}
