@@ -1,0 +1,1085 @@
+{
+  "backend": "baseline",
+  "endpoint": null,
+  "model": null,
+  "goldenset_slice": {
+    "start": "q001",
+    "count": 100
+  },
+  "read_only": true,
+  "summary": {
+    "n": 100,
+    "errors": 0,
+    "mean_seconds": 0.084,
+    "p50_seconds": 0.053,
+    "p95_seconds": 0.085,
+    "max_seconds": 1.279,
+    "context_hits": 73,
+    "context_hit_rate": 0.73,
+    "route_accuracy": 0.15,
+    "anchor_recall_mean": 0.911,
+    "variant_bound_accuracy": null,
+    "by_category": {
+      "architecture_decision": {
+        "n": 10,
+        "mean_seconds": 0.165,
+        "context_hits": 10
+      },
+      "bdh_graph": {
+        "n": 10,
+        "mean_seconds": 0.052,
+        "context_hits": 10
+      },
+      "context_edge": {
+        "n": 10,
+        "mean_seconds": 0.183,
+        "context_hits": 8
+      },
+      "debugging_lesson": {
+        "n": 10,
+        "mean_seconds": 0.051,
+        "context_hits": 10
+      },
+      "durable_nontechnical": {
+        "n": 10,
+        "mean_seconds": 0.049,
+        "context_hits": 4
+      },
+      "hermes_runtime": {
+        "n": 10,
+        "mean_seconds": 0.176,
+        "context_hits": 8
+      },
+      "multi_topic": {
+        "n": 10,
+        "mean_seconds": 0.063,
+        "context_hits": 9
+      },
+      "operational_noise": {
+        "n": 10,
+        "mean_seconds": 0.004,
+        "context_hits": 0
+      },
+      "project_context": {
+        "n": 10,
+        "mean_seconds": 0.048,
+        "context_hits": 8
+      },
+      "routing_policy": {
+        "n": 10,
+        "mean_seconds": 0.05,
+        "context_hits": 6
+      }
+    }
+  },
+  "rows": [
+    {
+      "id": "q001",
+      "category": "architecture_decision",
+      "elapsed_seconds": 1.095,
+      "context_injected": true,
+      "context_chars": 483,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q002",
+      "category": "architecture_decision",
+      "elapsed_seconds": 0.059,
+      "context_injected": true,
+      "context_chars": 495,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q003",
+      "category": "architecture_decision",
+      "elapsed_seconds": 0.07,
+      "context_injected": true,
+      "context_chars": 502,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q004",
+      "category": "architecture_decision",
+      "elapsed_seconds": 0.065,
+      "context_injected": true,
+      "context_chars": 603,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q005",
+      "category": "architecture_decision",
+      "elapsed_seconds": 0.07,
+      "context_injected": true,
+      "context_chars": 517,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q006",
+      "category": "architecture_decision",
+      "elapsed_seconds": 0.061,
+      "context_injected": true,
+      "context_chars": 534,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q007",
+      "category": "architecture_decision",
+      "elapsed_seconds": 0.064,
+      "context_injected": true,
+      "context_chars": 543,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q008",
+      "category": "architecture_decision",
+      "elapsed_seconds": 0.052,
+      "context_injected": true,
+      "context_chars": 514,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q009",
+      "category": "architecture_decision",
+      "elapsed_seconds": 0.062,
+      "context_injected": true,
+      "context_chars": 505,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q010",
+      "category": "architecture_decision",
+      "elapsed_seconds": 0.053,
+      "context_injected": true,
+      "context_chars": 527,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q011",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 0.045,
+      "context_injected": true,
+      "context_chars": 487,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q012",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 0.052,
+      "context_injected": true,
+      "context_chars": 569,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q013",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 0.051,
+      "context_injected": true,
+      "context_chars": 545,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q014",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 0.046,
+      "context_injected": true,
+      "context_chars": 543,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q015",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 0.053,
+      "context_injected": true,
+      "context_chars": 521,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q016",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 0.045,
+      "context_injected": true,
+      "context_chars": 537,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q017",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 0.053,
+      "context_injected": true,
+      "context_chars": 613,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q018",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 0.049,
+      "context_injected": true,
+      "context_chars": 575,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q019",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 0.06,
+      "context_injected": true,
+      "context_chars": 523,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q020",
+      "category": "debugging_lesson",
+      "elapsed_seconds": 0.054,
+      "context_injected": true,
+      "context_chars": 546,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q021",
+      "category": "bdh_graph",
+      "elapsed_seconds": 0.044,
+      "context_injected": true,
+      "context_chars": 484,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q022",
+      "category": "bdh_graph",
+      "elapsed_seconds": 0.045,
+      "context_injected": true,
+      "context_chars": 538,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q023",
+      "category": "bdh_graph",
+      "elapsed_seconds": 0.053,
+      "context_injected": true,
+      "context_chars": 545,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q024",
+      "category": "bdh_graph",
+      "elapsed_seconds": 0.058,
+      "context_injected": true,
+      "context_chars": 575,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q025",
+      "category": "bdh_graph",
+      "elapsed_seconds": 0.055,
+      "context_injected": true,
+      "context_chars": 529,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q026",
+      "category": "bdh_graph",
+      "elapsed_seconds": 0.04,
+      "context_injected": true,
+      "context_chars": 520,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q027",
+      "category": "bdh_graph",
+      "elapsed_seconds": 0.058,
+      "context_injected": true,
+      "context_chars": 543,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q028",
+      "category": "bdh_graph",
+      "elapsed_seconds": 0.059,
+      "context_injected": true,
+      "context_chars": 542,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q029",
+      "category": "bdh_graph",
+      "elapsed_seconds": 0.062,
+      "context_injected": true,
+      "context_chars": 532,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q030",
+      "category": "bdh_graph",
+      "elapsed_seconds": 0.051,
+      "context_injected": true,
+      "context_chars": 548,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q031",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 0.045,
+      "context_injected": true,
+      "context_chars": 502,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q032",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 0.048,
+      "context_injected": true,
+      "context_chars": 499,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q033",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 0.048,
+      "context_injected": true,
+      "context_chars": 521,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q034",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 0.058,
+      "context_injected": true,
+      "context_chars": 495,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q035",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 0.047,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q036",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 0.058,
+      "context_injected": true,
+      "context_chars": 524,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q037",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 1.26,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q038",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 0.085,
+      "context_injected": true,
+      "context_chars": 543,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q039",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 0.049,
+      "context_injected": true,
+      "context_chars": 556,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q040",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 0.059,
+      "context_injected": true,
+      "context_chars": 554,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q041",
+      "category": "project_context",
+      "elapsed_seconds": 0.049,
+      "context_injected": true,
+      "context_chars": 497,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q042",
+      "category": "project_context",
+      "elapsed_seconds": 0.059,
+      "context_injected": true,
+      "context_chars": 522,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q043",
+      "category": "project_context",
+      "elapsed_seconds": 0.053,
+      "context_injected": true,
+      "context_chars": 523,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q044",
+      "category": "project_context",
+      "elapsed_seconds": 0.043,
+      "context_injected": true,
+      "context_chars": 492,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q045",
+      "category": "project_context",
+      "elapsed_seconds": 0.052,
+      "context_injected": true,
+      "context_chars": 476,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q046",
+      "category": "project_context",
+      "elapsed_seconds": 0.047,
+      "context_injected": true,
+      "context_chars": 514,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q047",
+      "category": "project_context",
+      "elapsed_seconds": 0.036,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q048",
+      "category": "project_context",
+      "elapsed_seconds": 0.036,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q049",
+      "category": "project_context",
+      "elapsed_seconds": 0.053,
+      "context_injected": true,
+      "context_chars": 470,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q050",
+      "category": "project_context",
+      "elapsed_seconds": 0.056,
+      "context_injected": true,
+      "context_chars": 483,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q051",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 0.07,
+      "context_injected": true,
+      "context_chars": 535,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q052",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 0.04,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q053",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 0.038,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q054",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 0.037,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q055",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 0.056,
+      "context_injected": true,
+      "context_chars": 561,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q056",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 0.066,
+      "context_injected": true,
+      "context_chars": 485,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q057",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 0.039,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q058",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 0.065,
+      "context_injected": true,
+      "context_chars": 562,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q059",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 0.04,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q060",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 0.039,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q061",
+      "category": "operational_noise",
+      "elapsed_seconds": 0.0,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q062",
+      "category": "operational_noise",
+      "elapsed_seconds": 0.0,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q063",
+      "category": "operational_noise",
+      "elapsed_seconds": 0.0,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q064",
+      "category": "operational_noise",
+      "elapsed_seconds": 0.036,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q065",
+      "category": "operational_noise",
+      "elapsed_seconds": 0.0,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q066",
+      "category": "operational_noise",
+      "elapsed_seconds": 0.0,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q067",
+      "category": "operational_noise",
+      "elapsed_seconds": 0.0,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q068",
+      "category": "operational_noise",
+      "elapsed_seconds": 0.0,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q069",
+      "category": "operational_noise",
+      "elapsed_seconds": 0.0,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q070",
+      "category": "operational_noise",
+      "elapsed_seconds": 0.0,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q071",
+      "category": "multi_topic",
+      "elapsed_seconds": 0.085,
+      "context_injected": true,
+      "context_chars": 549,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q072",
+      "category": "multi_topic",
+      "elapsed_seconds": 0.075,
+      "context_injected": true,
+      "context_chars": 532,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q073",
+      "category": "multi_topic",
+      "elapsed_seconds": 0.068,
+      "context_injected": true,
+      "context_chars": 527,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q074",
+      "category": "multi_topic",
+      "elapsed_seconds": 0.065,
+      "context_injected": true,
+      "context_chars": 547,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q075",
+      "category": "multi_topic",
+      "elapsed_seconds": 0.076,
+      "context_injected": true,
+      "context_chars": 547,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q076",
+      "category": "multi_topic",
+      "elapsed_seconds": 0.055,
+      "context_injected": true,
+      "context_chars": 572,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q077",
+      "category": "multi_topic",
+      "elapsed_seconds": 0.053,
+      "context_injected": true,
+      "context_chars": 519,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q078",
+      "category": "multi_topic",
+      "elapsed_seconds": 0.056,
+      "context_injected": true,
+      "context_chars": 600,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q079",
+      "category": "multi_topic",
+      "elapsed_seconds": 0.055,
+      "context_injected": true,
+      "context_chars": 603,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q080",
+      "category": "multi_topic",
+      "elapsed_seconds": 0.041,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q001",
+      "category": "context_edge",
+      "elapsed_seconds": 0.04,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q002",
+      "category": "context_edge",
+      "elapsed_seconds": 0.059,
+      "context_injected": true,
+      "context_chars": 566,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q003",
+      "category": "context_edge",
+      "elapsed_seconds": 0.063,
+      "context_injected": true,
+      "context_chars": 481,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q004",
+      "category": "context_edge",
+      "elapsed_seconds": 1.279,
+      "context_injected": true,
+      "context_chars": 521,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q005",
+      "category": "context_edge",
+      "elapsed_seconds": 0.102,
+      "context_injected": true,
+      "context_chars": 561,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q006",
+      "category": "context_edge",
+      "elapsed_seconds": 0.077,
+      "context_injected": true,
+      "context_chars": 560,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q007",
+      "category": "context_edge",
+      "elapsed_seconds": 0.057,
+      "context_injected": true,
+      "context_chars": 560,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q008",
+      "category": "context_edge",
+      "elapsed_seconds": 0.039,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q009",
+      "category": "context_edge",
+      "elapsed_seconds": 0.061,
+      "context_injected": true,
+      "context_chars": 565,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q010",
+      "category": "context_edge",
+      "elapsed_seconds": 0.055,
+      "context_injected": true,
+      "context_chars": 541,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q011",
+      "category": "routing_policy",
+      "elapsed_seconds": 0.053,
+      "context_injected": true,
+      "context_chars": 533,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q012",
+      "category": "routing_policy",
+      "elapsed_seconds": 0.053,
+      "context_injected": true,
+      "context_chars": 485,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q013",
+      "category": "routing_policy",
+      "elapsed_seconds": 0.059,
+      "context_injected": true,
+      "context_chars": 515,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q014",
+      "category": "routing_policy",
+      "elapsed_seconds": 0.061,
+      "context_injected": true,
+      "context_chars": 542,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q015",
+      "category": "routing_policy",
+      "elapsed_seconds": 0.035,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q016",
+      "category": "routing_policy",
+      "elapsed_seconds": 0.053,
+      "context_injected": true,
+      "context_chars": 524,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q017",
+      "category": "routing_policy",
+      "elapsed_seconds": 0.036,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q018",
+      "category": "routing_policy",
+      "elapsed_seconds": 0.033,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q019",
+      "category": "routing_policy",
+      "elapsed_seconds": 0.059,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q020",
+      "category": "routing_policy",
+      "elapsed_seconds": 0.056,
+      "context_injected": true,
+      "context_chars": 500,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    }
+  ],
+  "rewrite_timeout_seconds": 15,
+  "goldenset": {
+    "path": "/Users/albi/Projects/bdh-hermes-bridge-query-contract/benchmarks/query_rewrite_goldenset.json",
+    "version": 1,
+    "size": 100,
+    "slice_start_index": 0,
+    "slice_count": 100
+  }
+}

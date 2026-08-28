@@ -1,0 +1,536 @@
+{
+  "backend": "omlx",
+  "endpoint": "http://127.0.0.1:8083/v1",
+  "model": "qwen3.8-27b-oq4e-mtp",
+  "goldenset_slice": {
+    "start": "q001",
+    "count": 20
+  },
+  "read_only": true,
+  "summary": {
+    "n": 20,
+    "errors": 0,
+    "mean_seconds": 7.1,
+    "p50_seconds": 7.003,
+    "p95_seconds": 8.719,
+    "max_seconds": 9.973,
+    "context_hits": 6,
+    "context_hit_rate": 0.3,
+    "route_accuracy": 0.9,
+    "anchor_recall_mean": 0.976,
+    "variant_bound_accuracy": 0.55,
+    "by_category": {
+      "context_edge": {
+        "n": 10,
+        "mean_seconds": 7.455,
+        "context_hits": 4
+      },
+      "routing_policy": {
+        "n": 10,
+        "mean_seconds": 6.744,
+        "context_hits": 2
+      }
+    },
+    "rewrite_successes": 20,
+    "rewrite_success_rate": 1.0
+  },
+  "rows": [
+    {
+      "id": "q001",
+      "category": "context_edge",
+      "elapsed_seconds": 8.4,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Quella scelta che avevamo fatto per il modello locale vale ancora dopo il passaggio a oMLX?",
+        "search_query": "local model choice decision oMLX migration BDH bridge",
+        "sub_queries": [
+          "local model selection decision",
+          "oMLX migration impact on local model"
+        ],
+        "knowledge_types": [
+          "decisions",
+          "architecture choices"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 8.318
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q002",
+      "category": "context_edge",
+      "elapsed_seconds": 6.796,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": true,
+        "should_query": false,
+        "query": "Confermo che la query originale deve restare disponibile anche quando usiamo una search_query tradotta.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [
+          "decision",
+          "architecture_choice"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 6.796
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q003",
+      "category": "context_edge",
+      "elapsed_seconds": 5.876,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Non è una decisione: sto solo facendo una prova di latenza del bridge.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 5.875
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q004",
+      "category": "context_edge",
+      "elapsed_seconds": 7.59,
+      "context_injected": true,
+      "context_chars": 521,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Ricordami se il contesto BDH viene inserito nel system prompt permanente o solo nel turno corrente.",
+        "search_query": "BDH context injection system prompt permanent vs current turn",
+        "sub_queries": [
+          "BDH integration context handling",
+          "System prompt persistence strategy BDH"
+        ],
+        "knowledge_types": [
+          "architecture_choice",
+          "project_context"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 7.466
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q005",
+      "category": "context_edge",
+      "elapsed_seconds": 5.95,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": true,
+        "should_query": false,
+        "query": "La query canonica deve rimanere in italiano mentre la variante di ricerca può essere in inglese.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [
+          "workflow",
+          "convention"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 5.95
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q006",
+      "category": "context_edge",
+      "elapsed_seconds": 9.973,
+      "context_injected": true,
+      "context_chars": 567,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Come impedire che i concetti aggiunti dal rewrite diventino fatti nel vault durante l'integrazione BDH e il bridge?",
+        "search_query": "BDH integration bridge rewrite hallucination prevention vault fact contamination context preservation",
+        "sub_queries": [
+          "BDH bridge architecture context preservation",
+          "Rewrite mechanism fact extraction validation"
+        ],
+        "knowledge_types": [
+          "architecture",
+          "strategy"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 8.97
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q007",
+      "category": "context_edge",
+      "elapsed_seconds": 7.947,
+      "context_injected": true,
+      "context_chars": 571,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Problema identificato: il modello produce JSON con thinking attivo e il parser lo rifiuta durante l'integrazione BDH e il bridge.",
+        "search_query": "BDH integration bridge JSON parser thinking mode rejection",
+        "sub_queries": [
+          "BDH integration architecture",
+          "JSON parser constraints thinking mode"
+        ],
+        "knowledge_types": [
+          "decisions",
+          "lessons learned"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 7.825
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q008",
+      "category": "context_edge",
+      "elapsed_seconds": 8.653,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Che cosa è cambiato nel contratto tra should_query e should_retrieve?",
+        "search_query": "contract changes should_query should_retrieve BDH bridge integration",
+        "sub_queries": [
+          "should_query should_retrieve contract definition",
+          "BDH bridge integration query retrieval logic"
+        ],
+        "knowledge_types": [
+          "architecture",
+          "decisions"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 7.456
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q009",
+      "category": "context_edge",
+      "elapsed_seconds": 5.229,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Nota temporanea di sessione: non salvare nel vault",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 1.0,
+        "provider_elapsed_seconds": 5.229
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q010",
+      "category": "context_edge",
+      "elapsed_seconds": 8.137,
+      "context_injected": true,
+      "context_chars": 541,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Il fallback locale deve mantenere la stessa query e non cambiare il significato della richiesta.",
+        "search_query": "BDH integration bridge local fallback query semantics preservation",
+        "sub_queries": [
+          "BDH bridge local fallback mechanism",
+          "Query semantics preservation in fallback logic"
+        ],
+        "knowledge_types": [
+          "architecture_choice",
+          "constraint"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 7.677
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q011",
+      "category": "routing_policy",
+      "elapsed_seconds": 5.69,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Puoi eseguire il benchmark completo e salvarne il report nel branch?",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 5.69
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q012",
+      "category": "routing_policy",
+      "elapsed_seconds": 5.794,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Controlla i log di oMLX e dimmi se il server è healthy.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 5.794
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q013",
+      "category": "routing_policy",
+      "elapsed_seconds": 8.571,
+      "context_injected": true,
+      "context_chars": 511,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Riepilogo delle decisioni prese sul query rewriting di BDH",
+        "search_query": "BDH query rewriting decisions architecture",
+        "sub_queries": [
+          "BDH query rewriting strategy",
+          "BDH integration bridge context preservation"
+        ],
+        "knowledge_types": [
+          "decisions",
+          "architecture choices"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 7.484
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q014",
+      "category": "routing_policy",
+      "elapsed_seconds": 6.418,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": true,
+        "should_query": false,
+        "query": "Il retrieval e il learning sono indipendenti",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [
+          "decision",
+          "architecture"
+        ],
+        "confidence": 1.0,
+        "provider_elapsed_seconds": 6.418
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q015",
+      "category": "routing_policy",
+      "elapsed_seconds": 5.631,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Non salvare questa frase, serve solo a verificare il comportamento del classificatore.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 1.0,
+        "provider_elapsed_seconds": 5.631
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q016",
+      "category": "routing_policy",
+      "elapsed_seconds": 8.221,
+      "context_injected": true,
+      "context_chars": 524,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Ricordi perché abbiamo scelto di usare conversation_history invece di state.db?",
+        "search_query": "decision rationale conversation_history vs state.db BDH bridge integration",
+        "sub_queries": [
+          "why choose conversation_history over state.db",
+          "BDH bridge architecture state management decision"
+        ],
+        "knowledge_types": [
+          "decisions",
+          "architecture choices"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 7.682
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q017",
+      "category": "routing_policy",
+      "elapsed_seconds": 7.086,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": true,
+        "should_query": false,
+        "query": "Decisione definitiva: utilizzo di oMLX locale per Qwen nell'integrazione BDH e bridge.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [
+          "decision",
+          "architecture_choice"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 7.086
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q018",
+      "category": "routing_policy",
+      "elapsed_seconds": 5.369,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Crea un commit con queste modifiche e poi fai push.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 1.0,
+        "provider_elapsed_seconds": 5.369
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q019",
+      "category": "routing_policy",
+      "elapsed_seconds": 7.741,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Cosa ne pensi del fatto che il rewrite costi diversi secondi per ogni messaggio?",
+        "search_query": "BDH integration bridge rewrite latency performance cost per message",
+        "sub_queries": [
+          "BDH bridge architecture rewrite mechanism",
+          "Performance constraints message processing latency"
+        ],
+        "knowledge_types": [
+          "architecture",
+          "performance"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 7.62
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q020",
+      "category": "routing_policy",
+      "elapsed_seconds": 6.92,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": true,
+        "should_query": false,
+        "query": "Abbiamo chiuso il contratto v2 e il test end-to-end è passato.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [
+          "decision",
+          "project_context"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 6.92
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    }
+  ],
+  "rewrite_timeout_seconds": 15,
+  "goldenset": {
+    "path": "/Users/albi/Projects/bdh-hermes-bridge-query-contract/benchmarks/query_rewrite_goldenset.json",
+    "version": 1,
+    "size": 100,
+    "slice_start_index": 80,
+    "slice_count": 20
+  }
+}
