@@ -139,7 +139,7 @@ _PROMPT_BLACKLIST_FILE = Path(
 _QUERY_REWRITE_ENABLED = os.environ.get("BDH_QUERY_REWRITE_ENABLED", "").lower() in (
     "1", "true", "yes", "on",
 )
-_REWRITE_MODEL = os.environ.get("BDH_REWRITE_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash"
+_REWRITE_MODEL = os.environ.get("BDH_REWRITE_MODEL", "deepseek-v4-flash:cloud").strip() or "deepseek-v4-flash:cloud"
 _REWRITE_TIMEOUT = _bounded_int(
     os.environ.get("BDH_REWRITE_TIMEOUT", "15"), 15, maximum=15
 )
@@ -186,6 +186,40 @@ _DEFAULT_REWRITE_SYSTEM_PROMPT = (
     "6. `search_query` is retrieval-only and may use concise English/technical "
     "keywords when that improves recall; `query` remains the canonical "
     "user-language intent for storage.\n"
+    "Few-shot examples for routing calibration. Apply the same principles, not literal keyword matching.\n\n"
+    "Example 1 — operational noise:\n"
+    'User message: "ok committa e pusha il fix"\n'
+    "Output:\n"
+    '{"schema_version":2,"should_retrieve":false,"store_candidate":false,"query":"ok committa e pusha il fix","search_query":"","sub_queries":[],"knowledge_types":[],"confidence":0.95}\n\n'
+    "Example 2 — operational acknowledgement:\n"
+    'User message: "come andiamo?"\n'
+    "Output:\n"
+    '{"schema_version":2,"should_retrieve":false,"store_candidate":false,"query":"come andiamo?","search_query":"","sub_queries":[],"knowledge_types":[],"confidence":0.9}\n\n'
+    "Example 3 — knowledge question:\n"
+    'User message: "Come funziona l\'apprendimento Hebbiano?"\n'
+    "Output:\n"
+    "{\"schema_version\":2,\"should_retrieve\":true,\"store_candidate\":false,\"query\":\"Come funziona l'apprendimento Hebbiano?\",\"search_query\":\"Hebbian learning mechanism\",\"sub_queries\":[],\"knowledge_types\":[\"concepts\"],\"confidence\":0.95}\n\n"
+    "Example 4 — architecture question:\n"
+    'User message: "Qual è la differenza tra il read path e il write path del bridge?"\n'
+    "Output:\n"
+    '{"schema_version":2,"should_retrieve":true,"store_candidate":false,"query":"Differenza tra read path e write path del bridge","search_query":"BDH bridge read path vs write path","sub_queries":[],"knowledge_types":["architecture"],"confidence":0.95}\n\n'
+    "Example 5 — durable decision:\n"
+    'User message: "La scelta è usare il vault come substrato del grafo e Chroma solo come indice di embedding."\n'
+    "Output:\n"
+    '{"schema_version":2,"should_retrieve":false,"store_candidate":true,"query":"La scelta è usare il vault come substrato del grafo e Chroma solo come indice di embedding.","search_query":"","sub_queries":[],"knowledge_types":["architecture choices","decisions"],"confidence":0.95}\n\n'
+    "Example 6 — durable proposal:\n"
+    'User message: "Aggiungiamo query classification e routing per non inquinare il vault."\n'
+    "Output:\n"
+    '{"schema_version":2,"should_retrieve":false,"store_candidate":true,"query":"Aggiungere query classification e routing per prevenire la contaminazione del vault","search_query":"","sub_queries":[],"knowledge_types":["architecture choices","strategies"],"confidence":0.9}\n\n'
+    "Example 7 — project status retrieval:\n"
+    'User message: "Come avevamo risolto il problema del gateway BDH?"\n'
+    "Output:\n"
+    '{"schema_version":2,"should_retrieve":true,"store_candidate":false,"query":"Come avevamo risolto il problema del gateway BDH?","search_query":"BDH gateway problem solution fix","sub_queries":[],"knowledge_types":["lessons learned","decisions"],"confidence":0.95}\n\n'
+    "Example 8 — unrelated external link:\n"
+    'User message: "Cosa ne pensi di questo? https://example.com/article"\n'
+    "Output:\n"
+    '{"schema_version":2,"should_retrieve":false,"store_candidate":false,"query":"Cosa ne pensi di questo? https://example.com/article","search_query":"","sub_queries":[],"knowledge_types":[],"confidence":0.8}\n\n'
+    "Important calibration rule: `should_retrieve` and `store_candidate` are independent. A question normally retrieves but is not itself a durable candidate. A durable decision or proposal may be stored without retrieving first. Operational commands, acknowledgements, status checks, and transient UI/task actions are neither. Never turn a short operational message into a knowledge query merely because recent context is technical.\n"
     "Reply as JSON only:\n"
     '{"schema_version": 2, "should_retrieve": true|false, "store_candidate": true|false, "query": "...", "search_query": "...", "sub_queries": ["..."], "knowledge_types": [], "confidence": 0.0}'
 )

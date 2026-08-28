@@ -52,11 +52,13 @@ def anchor_recall(text: str, anchors: list[str]) -> float | None:
 
 def run_case(module, prefix: str, item: dict, rewrite_capture=None):
     message = item["message"]
-    history = [
-        {"role": "user", "content": "Stiamo lavorando sull'integrazione BDH e sul bridge."},
-        {"role": "assistant", "content": "Il sistema deve preservare il contesto senza inquinare il vault."},
-        {"role": "tool", "content": "This tool payload must never reach the rewrite model."},
-    ]
+    history = item.get("history")
+    if not isinstance(history, list):
+        history = [
+            {"role": "user", "content": "Stiamo lavorando sull'integrazione BDH e sul bridge."},
+            {"role": "assistant", "content": "Il sistema deve preservare il contesto senza inquinare il vault."},
+            {"role": "tool", "content": "This tool payload must never reach the rewrite model."},
+        ]
     started = time.perf_counter()
     result = None
     error = None
@@ -243,10 +245,11 @@ def main():
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--count", type=int, default=20)
     parser.add_argument("--rewrite-timeout", type=int, default=15)
+    parser.add_argument("--goldenset", type=Path, default=GOLDENSET)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
-    dataset = json.loads(GOLDENSET.read_text(encoding="utf-8"))
+    dataset = json.loads(args.goldenset.read_text(encoding="utf-8"))
     all_items = dataset["items"]
     if args.start < 0 or args.count <= 0 or args.start >= len(all_items):
         raise SystemExit("invalid benchmark slice")
@@ -254,7 +257,7 @@ def main():
     report = run_backend(args.backend, items, args.rewrite_timeout)
     report["rewrite_timeout_seconds"] = args.rewrite_timeout
     report["goldenset"] = {
-        "path": str(GOLDENSET),
+        "path": str(args.goldenset),
         "version": dataset.get("version"),
         "size": len(all_items),
         "slice_start_index": args.start,
