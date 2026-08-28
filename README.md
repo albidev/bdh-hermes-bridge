@@ -124,6 +124,24 @@ python3 benchmarks/run_query_rewrite_benchmark.py \
 
 The active benchmark uses local oMLX/Qwen (`127.0.0.1:8083`, model `qwen3.8-27b-oq4e-mtp`) or Ollama Cloud when explicitly selected with `--backend cloud`. Reports include total serial wall time, p50/p95 latency, rewrite success, routing accuracy, context hits, and variant bounds. Reports generated against goldenset v1 are superseded: v2 fixes duplicate IDs in the final 20 cases.
 
+### Validation results
+
+The approved default was validated on 100 real user queries sampled from previous BDH sessions, with their preceding conversation context. The raw goldenset and per-query reports are private and are intentionally not committed.
+
+| Metric | Cloud base prompt | Cloud + few-shot v1 |
+|---|---:|---:|
+| Joint route accuracy | 62% | **73%** |
+| Retrieve accuracy | 69% | **76%** |
+| Store accuracy | 82% | **91%** |
+| False-retrieve rate | 36.1% | **13.1%** |
+| False-store rate | 15.6% | **5.6%** |
+| Rewrite success | 96% | 96% |
+| Mean latency | 5.39s | **3.52s** |
+| p50 latency | 4.25s | **2.42s** |
+| p95 latency | 14.19s | **11.63s** |
+
+The few-shot prompt is therefore the production default for the rewrite path: it improves routing and reduces vault pollution without changing the write-path safety rule. Four of the 100 Cloud calls hit the bounded timeout and used the mechanical fallback; invalid JSON, unreachable providers, and timeouts follow the same fallback path. oMLX remains the fallback provider, not the default, because its few-shot latency is materially higher.
+
 **Default classification prompt:**
 
 ```text
