@@ -1,0 +1,568 @@
+{
+  "backend": "cloud",
+  "endpoint": "https://ollama.com/v1",
+  "model": "deepseek-v4-flash:cloud",
+  "goldenset_slice": {
+    "start": "q021",
+    "count": 20
+  },
+  "read_only": true,
+  "summary": {
+    "n": 20,
+    "errors": 0,
+    "mean_seconds": 6.135,
+    "p50_seconds": 5.648,
+    "p95_seconds": 10.528,
+    "max_seconds": 15.567,
+    "context_hits": 18,
+    "context_hit_rate": 0.9,
+    "route_accuracy": 0.5,
+    "anchor_recall_mean": 0.917,
+    "variant_bound_accuracy": 0.1,
+    "by_category": {
+      "bdh_graph": {
+        "n": 10,
+        "mean_seconds": 5.348,
+        "context_hits": 10
+      },
+      "hermes_runtime": {
+        "n": 10,
+        "mean_seconds": 6.922,
+        "context_hits": 8
+      }
+    },
+    "rewrite_successes": 19,
+    "rewrite_success_rate": 0.95
+  },
+  "rows": [
+    {
+      "id": "q021",
+      "category": "bdh_graph",
+      "elapsed_seconds": 6.572,
+      "context_injected": true,
+      "context_chars": 484,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Come funziona il consolidamento Hebbiano in BDH?",
+        "search_query": "Hebbian consolidation BDH",
+        "sub_queries": [
+          "BDH Hebbian consolidation process"
+        ],
+        "knowledge_types": [
+          "concept",
+          "architecture"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 6.462
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q022",
+      "category": "bdh_graph",
+      "elapsed_seconds": 3.441,
+      "context_injected": true,
+      "context_chars": 538,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Qual è la differenza tra un edge statico e un edge Hebbian?",
+        "search_query": "edge statico edge Hebbian differenza",
+        "sub_queries": [
+          "edge statico definizione",
+          "edge Hebbian definizione"
+        ],
+        "knowledge_types": [
+          "concept",
+          "architecture"
+        ],
+        "confidence": 0.7,
+        "provider_elapsed_seconds": 3.324
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q023",
+      "category": "bdh_graph",
+      "elapsed_seconds": 2.73,
+      "context_injected": true,
+      "context_chars": 545,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "BDH usa il traversal multi-hop solo dopo aver selezionato i seed migliori.",
+        "search_query": "BDH multi-hop traversal seed selection",
+        "sub_queries": [
+          "BDH seed selection strategy",
+          "BDH multi-hop traversal conditions"
+        ],
+        "knowledge_types": [
+          "architecture",
+          "decision"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 2.602
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q024",
+      "category": "bdh_graph",
+      "elapsed_seconds": 4.017,
+      "context_injected": true,
+      "context_chars": 575,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Perché il damping degli hub evita che il grafo venga dominato dalle note centrali?",
+        "search_query": "damping hubs graph dominance central notes",
+        "sub_queries": [
+          "hub damping graph centrality",
+          "graph dominance prevention damping"
+        ],
+        "knowledge_types": [
+          "concept",
+          "lesson_learned"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 3.912
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q025",
+      "category": "bdh_graph",
+      "elapsed_seconds": 5.347,
+      "context_injected": true,
+      "context_chars": 529,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "La soglia di rilevanza combina lexical match BM25 e similarità vettoriale.",
+        "search_query": "relevance threshold BM25 vector similarity",
+        "sub_queries": [
+          "soglia di rilevanza BM25 similarità vettoriale"
+        ],
+        "knowledge_types": [
+          "architecture_choice",
+          "decision"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 3.967
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q026",
+      "category": "bdh_graph",
+      "elapsed_seconds": 7.641,
+      "context_injected": true,
+      "context_chars": 520,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Come vengono creati i nuovi concetti durante la neurogenesis?",
+        "search_query": "neurogenesis new concept creation biological mechanism",
+        "sub_queries": [
+          "neurogenesis concept formation mechanism",
+          "BDH integration bridge concept creation"
+        ],
+        "knowledge_types": [
+          "factual_knowledge",
+          "neuroscience",
+          "project_context"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 7.547
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q027",
+      "category": "bdh_graph",
+      "elapsed_seconds": 6.866,
+      "context_injected": true,
+      "context_chars": 543,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Gli edge Hebbian non sono claim di verità e non devono diventare provenance OKF.",
+        "search_query": "Hebbian edges truth claims OKF provenance",
+        "sub_queries": [
+          "Hebbian edges and OKF provenance rules"
+        ],
+        "knowledge_types": [
+          "decision",
+          "rule"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 6.735
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q028",
+      "category": "bdh_graph",
+      "elapsed_seconds": 2.971,
+      "context_injected": true,
+      "context_chars": 542,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Cosa succede alla frequenza sinaptica quando la query arriva dal messaggio assistant?",
+        "search_query": "frequenza sinaptica query assistant messaggio BDH bridge vault",
+        "sub_queries": [
+          "frequenza sinaptica definizione comportamento",
+          "query da messaggio assistant gestione contesto vault"
+        ],
+        "knowledge_types": [
+          "concept",
+          "architecture",
+          "decision"
+        ],
+        "confidence": 0.6,
+        "provider_elapsed_seconds": 2.838
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q029",
+      "category": "bdh_graph",
+      "elapsed_seconds": 9.739,
+      "context_injected": true,
+      "context_chars": 532,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Il grafo federato risolve gli ID legacy al graph boundary senza modificare il vault.",
+        "search_query": "federated graph legacy ID resolution graph boundary vault",
+        "sub_queries": [
+          "federated graph legacy ID resolution without vault modification"
+        ],
+        "knowledge_types": [
+          "architecture_decision",
+          "strategy"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 9.604
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q030",
+      "category": "bdh_graph",
+      "elapsed_seconds": 4.155,
+      "context_injected": true,
+      "context_chars": 548,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Come funzionano le query variants nel retrieval ibrido di BDH?",
+        "search_query": "BDH hybrid retrieval query variants mechanism",
+        "sub_queries": [
+          "BDH query variants implementation in hybrid retrieval"
+        ],
+        "knowledge_types": [
+          "concept",
+          "architecture",
+          "factual"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 4.028
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q031",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 6.919,
+      "context_injected": true,
+      "context_chars": 502,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Qual è il percorso corretto del profilo Hermes attivo?",
+        "search_query": "Hermes active profile path",
+        "sub_queries": [
+          "percorso profilo Hermes attivo",
+          "Hermes profile configuration path"
+        ],
+        "knowledge_types": [
+          "architecture_choice",
+          "configuration",
+          "project_context"
+        ],
+        "confidence": 0.7,
+        "provider_elapsed_seconds": 6.808
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q032",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 5.882,
+      "context_injected": true,
+      "context_chars": 499,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Hermes deve rispettare HERMES_HOME invece di usare ~/.hermes hardcoded.",
+        "search_query": "Hermes HERMES_HOME configuration path",
+        "sub_queries": [
+          "Hermes HERMES_HOME environment variable",
+          "Hermes configuration path decision"
+        ],
+        "knowledge_types": [
+          "decision",
+          "architecture_choice"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 5.759
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q033",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 6.545,
+      "context_injected": true,
+      "context_chars": 521,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Come si registra correttamente un plugin Hermes e quali hook può usare?",
+        "search_query": "Hermes plugin registration hooks",
+        "sub_queries": [
+          "Come registrare un plugin Hermes",
+          "Quali hook può usare un plugin Hermes"
+        ],
+        "knowledge_types": [
+          "how-to",
+          "technical"
+        ],
+        "confidence": 0.7,
+        "provider_elapsed_seconds": 6.419
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q034",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 2.969,
+      "context_injected": true,
+      "context_chars": 495,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Il plugin bdh-hermes-bridge è standalone e viene abilitato in plugins.enabled.",
+        "search_query": "bdh-hermes-bridge plugin standalone plugins.enabled",
+        "sub_queries": [
+          "bdh-hermes-bridge plugin configuration",
+          "BDH integration bridge plugin"
+        ],
+        "knowledge_types": [
+          "architecture",
+          "configuration",
+          "decision"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 2.864
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q035",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 4.021,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Perché il pre_llm_call riceve conversation_history ma non state.db?",
+        "search_query": "pre_llm_call receives conversation_history but not state.db design rationale",
+        "sub_queries": [
+          "pre_llm_call input parameters and state.db",
+          "architecture decision: conversation_history vs state.db in pre_llm_call"
+        ],
+        "knowledge_types": [
+          "architecture",
+          "decision",
+          "design rationale"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 3.945
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q036",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 5.414,
+      "context_injected": true,
+      "context_chars": 523,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "I plugin Hermes vengono caricati all'avvio e richiedono un restart del gateway dopo le modifiche.",
+        "search_query": "Hermes plugin startup gateway restart modification",
+        "sub_queries": [
+          "Hermes plugin loading behavior and restart requirement"
+        ],
+        "knowledge_types": [
+          "factual_knowledge",
+          "architecture"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 5.297
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q037",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 10.263,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Come funziona il failover tra provider cloud e modello locale?",
+        "search_query": "failover cloud provider local model architecture",
+        "sub_queries": [],
+        "knowledge_types": [
+          "architecture",
+          "decision",
+          "concept"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 10.185
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q038",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 6.999,
+      "context_injected": true,
+      "context_chars": 543,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "oMLX serve Qwen con MTP e thinking disabilitato per gli output strutturati.",
+        "search_query": "oMLX Qwen MTP thinking disabled structured outputs",
+        "sub_queries": [
+          "oMLX Qwen configuration for structured outputs",
+          "MTP thinking disabled for structured outputs"
+        ],
+        "knowledge_types": [
+          "decision",
+          "configuration"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 6.886
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q039",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 15.567,
+      "context_injected": true,
+      "context_chars": 556,
+      "rewrite": null,
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q040",
+      "category": "hermes_runtime",
+      "elapsed_seconds": 4.643,
+      "context_injected": true,
+      "context_chars": 554,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "La configurazione dei secret appartiene a .env e non ai file versionati del repository.",
+        "search_query": "secret configuration .env versioned repository",
+        "sub_queries": [
+          "secret management .env best practice",
+          "secrets not in version control"
+        ],
+        "knowledge_types": [
+          "decision",
+          "lesson_learned"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 4.548
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    }
+  ],
+  "rewrite_timeout_seconds": 15,
+  "goldenset": {
+    "path": "/Users/albi/Projects/bdh-hermes-bridge-query-contract/benchmarks/query_rewrite_goldenset.json",
+    "version": 1,
+    "size": 100,
+    "slice_start_index": 20,
+    "slice_count": 20
+  }
+}

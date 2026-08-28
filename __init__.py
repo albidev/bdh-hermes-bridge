@@ -4,6 +4,13 @@ BDH Bridge — Bidirectional Hermes ↔ BDH Graph Harness integration.
 Write path: feeds session content to BDH after each API response.
 Read path: provides bdh_query and bdh_stats tools.
 
+v0.8.0:
+  - Independent retrieval/storage routing contract (schema_version=2)
+  - Strict boolean validation prevents string `"false"` from failing open
+  - Context recovery filters system/tool messages and deduplicates the current turn
+  - v2 retrieval variants capped at three
+  - Truncated (`finish_reason=length`) responses are not learned
+
 v0.7.1:
   - Session-end synthesis: accumulate written turns per session and, on
     session identity lifecycle (finalize/reset), flush a single curated
@@ -68,6 +75,18 @@ def _current_bdh_api():
     return os.environ.get("BDH_API_URL", _DEFAULT_BDH_API)
 
 
+def _bounded_int(value, default, minimum=1, maximum=None):
+    """Parse an integer setting without allowing import-time config failures."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    parsed = max(parsed, minimum)
+    if maximum is not None:
+        parsed = min(parsed, maximum)
+    return parsed
+
+
 # ---------------------------------------------------------------------------
 # State: capture user message from pre_llm_call for write path
 # ---------------------------------------------------------------------------
@@ -87,10 +106,14 @@ _SESSION_SYNTH_ENABLED = os.environ.get("BDH_SESSION_SYNTH_ENABLED", "").lower()
 )
 # A session is only worth synthesising once it has at least this many written
 # turns — a 1-turn session is already covered by the per-turn write path.
-_SESSION_SYNTH_MIN_TURNS = int(os.environ.get("BDH_SESSION_SYNTH_MIN_TURNS", "3"))
+_SESSION_SYNTH_MIN_TURNS = _bounded_int(
+    os.environ.get("BDH_SESSION_SYNTH_MIN_TURNS", "3"), 3, maximum=100
+)
 # Cap the transcript we feed to the synthesis so a long session cannot blow up
 # the BDH request / neurogenesis context.
-_SESSION_SYNTH_MAX_CHARS = int(os.environ.get("BDH_SESSION_SYNTH_MAX_CHARS", "6000"))
+_SESSION_SYNTH_MAX_CHARS = _bounded_int(
+    os.environ.get("BDH_SESSION_SYNTH_MAX_CHARS", "6000"), 6000, maximum=100000
+)
 _turn_states = {}
 _session_buffers = {}  # session_id -> list of {"user": ..., "assistant": ...}
 _flushed_sessions = set()  # session_ids already flushed — never double-flush
@@ -110,15 +133,19 @@ _PROMPT_BLACKLIST_FILE = Path(
 )
 
 # ---------------------------------------------------------------------------
-# Query rewrite pipeline config (v0.5.0)
+# Query rewrite pipeline config (v0.8.0)
 # ---------------------------------------------------------------------------
 
 _QUERY_REWRITE_ENABLED = os.environ.get("BDH_QUERY_REWRITE_ENABLED", "").lower() in (
     "1", "true", "yes", "on",
 )
-_REWRITE_MODEL = os.environ.get("BDH_REWRITE_MODEL", "deepseek-v4-flash")
-_REWRITE_TIMEOUT = int(os.environ.get("BDH_REWRITE_TIMEOUT", "5"))
-_REWRITE_API_URL = os.environ.get("BDH_REWRITE_API_URL", "https://ollama.com/v1")
+_REWRITE_MODEL = os.environ.get("BDH_REWRITE_MODEL", "deepseek-v4-flash:cloud").strip() or "deepseek-v4-flash:cloud"
+_REWRITE_TIMEOUT = _bounded_int(
+    os.environ.get("BDH_REWRITE_TIMEOUT", "15"), 15, maximum=15
+)
+_REWRITE_API_URL = (
+    os.environ.get("BDH_REWRITE_API_URL", "https://ollama.com/v1").strip().rstrip("/")
+)
 _REWRITE_API_KEY = os.environ.get(
     "BDH_REWRITE_API_KEY",
     os.environ.get("OLLAMA_API_KEY", ""),
@@ -126,12 +153,18 @@ _REWRITE_API_KEY = os.environ.get(
 _REWRITE_HTTP_REFERER = os.environ.get("BDH_REWRITE_HTTP_REFERER", "")
 _REWRITE_APP_TITLE = os.environ.get("BDH_REWRITE_APP_TITLE", "BDH Hermes Bridge")
 _REWRITE_PROMPT_FILE = os.environ.get("BDH_REWRITE_PROMPT_FILE", "")
-_CONTEXT_MESSAGES_N = int(os.environ.get("BDH_CONTEXT_MESSAGES_N", "6"))
-_CONTEXT_MSG_MAX_CHARS = int(os.environ.get("BDH_CONTEXT_MSG_MAX_CHARS", "200"))
+_CONTEXT_MESSAGES_N = _bounded_int(
+    os.environ.get("BDH_CONTEXT_MESSAGES_N", "6"), 6, maximum=20
+)
+_CONTEXT_MSG_MAX_CHARS = _bounded_int(
+    os.environ.get("BDH_CONTEXT_MSG_MAX_CHARS", "200"), 200, maximum=1000
+)
 # Max number of search/query variants accepted from an LLM rewrite. Extras are
 # dropped; duplicates/empty strings are filtered out. This keeps the bridge
 # provider-agnostic regardless of how an LLM names the array.
-_REWRITE_MAX_VARIANTS = int(os.environ.get("BDH_REWRITE_MAX_VARIANTS", "10"))
+_REWRITE_MAX_VARIANTS = _bounded_int(
+    os.environ.get("BDH_REWRITE_MAX_VARIANTS", "10"), 10, maximum=10
+)
 
 # Default rewrite prompt. Can be overridden via BDH_REWRITE_PROMPT_FILE.
 _DEFAULT_REWRITE_SYSTEM_PROMPT = (
@@ -141,20 +174,75 @@ _DEFAULT_REWRITE_SYSTEM_PROMPT = (
     "knowledge about the user's projects and workflow. It does NOT "
     "store operational commands, system diagnostics, or transient "
     "task status.\n"
-    "Given the user message and recent conversation context, decide:\n"
-    "1. Does this message contain knowledge that connects to other "
-    "concepts already in the graph? (decisions, explanations, facts, "
-    "strategies, architecture, lessons — NOT commands, acks, "
-    "diagnostics, or status)\n"
-    "2. If yes, rewrite it as a clear, search-friendly query preserving "
-    "the user's original language and intent.\n"
-    "3. If the message covers multiple topics, generate sub-queries.\n"
-    "4. Optionally produce a search_query field with English/technical "
-    "keywords if you believe it will improve recall against an "
-    "English-heavy knowledge graph; otherwise leave it equal to query.\n"
-    "Reply as JSON:\n"
-    '{"should_query": true|false, "query": "...", "search_query": "...", "sub_queries": ["...", "..."]}'
+    "Given the current user message and recent conversation context, decide:\n"
+    "1. Does this message require knowledge retrieval from the graph?\n"
+    "2. Does this interaction contain a durable knowledge candidate worth storing?\n"
+    "3. If retrieval is useful, rewrite the query as a clear, search-friendly "
+    "query preserving the user's language and intent.\n"
+    "4. If the message covers multiple genuinely independent topics, generate "
+    "at most three retrieval sub-queries.\n"
+    "5. Use context only to resolve references and omitted subjects. Never "
+    "invent facts, decisions, entities, or conclusions.\n"
+    "6. `search_query` is retrieval-only and may use concise English/technical "
+    "keywords when that improves recall; `query` remains the canonical "
+    "user-language intent for storage.\n"
+    "Few-shot examples for routing calibration. Apply the same principles, not literal keyword matching.\n\n"
+    "Example 1 — operational noise:\n"
+    'User message: "ok committa e pusha il fix"\n'
+    "Output:\n"
+    '{"schema_version":2,"should_retrieve":false,"store_candidate":false,"query":"ok committa e pusha il fix","search_query":"","sub_queries":[],"knowledge_types":[],"confidence":0.95}\n\n'
+    "Example 2 — operational acknowledgement:\n"
+    'User message: "come andiamo?"\n'
+    "Output:\n"
+    '{"schema_version":2,"should_retrieve":false,"store_candidate":false,"query":"come andiamo?","search_query":"","sub_queries":[],"knowledge_types":[],"confidence":0.9}\n\n'
+    "Example 3 — knowledge question:\n"
+    'User message: "Come funziona l\'apprendimento Hebbiano?"\n'
+    "Output:\n"
+    "{\"schema_version\":2,\"should_retrieve\":true,\"store_candidate\":false,\"query\":\"Come funziona l'apprendimento Hebbiano?\",\"search_query\":\"Hebbian learning mechanism\",\"sub_queries\":[],\"knowledge_types\":[\"concepts\"],\"confidence\":0.95}\n\n"
+    "Example 4 — architecture question:\n"
+    'User message: "Qual è la differenza tra il read path e il write path del bridge?"\n'
+    "Output:\n"
+    '{"schema_version":2,"should_retrieve":true,"store_candidate":false,"query":"Differenza tra read path e write path del bridge","search_query":"BDH bridge read path vs write path","sub_queries":[],"knowledge_types":["architecture"],"confidence":0.95}\n\n'
+    "Example 5 — durable decision:\n"
+    'User message: "La scelta è usare il vault come substrato del grafo e Chroma solo come indice di embedding."\n'
+    "Output:\n"
+    '{"schema_version":2,"should_retrieve":false,"store_candidate":true,"query":"La scelta è usare il vault come substrato del grafo e Chroma solo come indice di embedding.","search_query":"","sub_queries":[],"knowledge_types":["architecture choices","decisions"],"confidence":0.95}\n\n'
+    "Example 6 — durable proposal:\n"
+    'User message: "Aggiungiamo query classification e routing per non inquinare il vault."\n'
+    "Output:\n"
+    '{"schema_version":2,"should_retrieve":false,"store_candidate":true,"query":"Aggiungere query classification e routing per prevenire la contaminazione del vault","search_query":"","sub_queries":[],"knowledge_types":["architecture choices","strategies"],"confidence":0.9}\n\n'
+    "Example 7 — project status retrieval:\n"
+    'User message: "Come avevamo risolto il problema del gateway BDH?"\n'
+    "Output:\n"
+    '{"schema_version":2,"should_retrieve":true,"store_candidate":false,"query":"Come avevamo risolto il problema del gateway BDH?","search_query":"BDH gateway problem solution fix","sub_queries":[],"knowledge_types":["lessons learned","decisions"],"confidence":0.95}\n\n'
+    "Example 8 — unrelated external link:\n"
+    'User message: "Cosa ne pensi di questo? https://example.com/article"\n'
+    "Output:\n"
+    '{"schema_version":2,"should_retrieve":false,"store_candidate":false,"query":"Cosa ne pensi di questo? https://example.com/article","search_query":"","sub_queries":[],"knowledge_types":[],"confidence":0.8}\n\n'
+    "Important calibration rule: `should_retrieve` and `store_candidate` are independent. A question normally retrieves but is not itself a durable candidate. A durable decision or proposal may be stored without retrieving first. Operational commands, acknowledgements, status checks, and transient UI/task actions are neither. Never turn a short operational message into a knowledge query merely because recent context is technical.\n"
+    "Reply as JSON only:\n"
+    '{"schema_version": 2, "should_retrieve": true|false, "store_candidate": true|false, "query": "...", "search_query": "...", "sub_queries": ["..."], "knowledge_types": [], "confidence": 0.0}'
 )
+
+
+def _normalize_knowledge_types(value):
+    """Keep a small, non-authoritative list of knowledge labels for telemetry."""
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()][:4]
+
+
+def _normalize_confidence(value):
+    """Return a bounded numeric confidence, or None when it is not trustworthy."""
+    if isinstance(value, bool):
+        return None
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not 0.0 <= confidence <= 1.0:
+        return None
+    return confidence
 
 
 def _normalize_query_variants(result, user_message, max_variants=_REWRITE_MAX_VARIANTS):
@@ -185,21 +273,59 @@ def _normalize_query_variants(result, user_message, max_variants=_REWRITE_MAX_VA
     if not isinstance(result, dict):
         return None
 
-    should_query = bool(result.get("should_query", True))
-    if not should_query:
-        original_query = str(result.get("query") or user_message).strip()
-        if not original_query:
+    # v2 separates retrieval from storage. Keep accepting v1 output so a
+    # provider/model update cannot break the bridge during a rolling change.
+    is_v2 = (
+        result.get("schema_version") == 2
+        or "should_retrieve" in result
+        or "store_candidate" in result
+    )
+    if is_v2:
+        if result.get("schema_version") != 2:
             return None
+        should_retrieve = result.get("should_retrieve")
+        store_candidate = result.get("store_candidate")
+        if not isinstance(should_retrieve, bool) or not isinstance(store_candidate, bool):
+            return None
+    else:
+        should_retrieve = result.get("should_query", True)
+        if not isinstance(should_retrieve, bool):
+            return None
+        # v1 coupled both decisions. Preserve that behavior only for legacy
+        # payloads; new v2 payloads must choose independently.
+        store_candidate = should_retrieve
+
+    raw_query = result.get("query", "")
+    if raw_query is None and not (should_retrieve or store_candidate):
+        raw_query = ""
+    if not isinstance(raw_query, str):
+        return None
+    original_query = raw_query.strip()
+    if not original_query and (should_retrieve or store_candidate):
+        return None
+    if not original_query:
+        original_query = user_message.strip() if isinstance(user_message, str) else ""
+
+    if not should_retrieve:
+        if not is_v2:
+            # Preserve the exact v1 rejection shape for older callers.
+            return {
+                "should_query": False,
+                "query": original_query,
+                "search_query": original_query,
+                "sub_queries": [],
+            }
         return {
+            "schema_version": 2,
+            "should_retrieve": False,
+            "store_candidate": store_candidate,
             "should_query": False,
             "query": original_query,
-            "search_query": original_query,
+            "search_query": "",
             "sub_queries": [],
+            "knowledge_types": _normalize_knowledge_types(result.get("knowledge_types")),
+            "confidence": _normalize_confidence(result.get("confidence")),
         }
-
-    original_query = result.get("query", "").strip()
-    if not original_query:
-        return None
 
     variants = []
 
@@ -236,18 +362,32 @@ def _normalize_query_variants(result, user_message, max_variants=_REWRITE_MAX_VA
         if folded not in seen:
             seen.add(folded)
             deduped.append(v)
-    if len(deduped) > max_variants:
-        logger.debug(f"[bdh-bridge] variants truncated from {len(deduped)} to {max_variants}")
-        deduped = deduped[:max_variants]
+    # v2 deliberately caps the model at three alternatives. Legacy payloads
+    # retain the previous configurable limit during the migration window.
+    variant_limit = max(int(max_variants), 1)
+    if is_v2:
+        variant_limit = min(variant_limit, 3)
+    if len(deduped) > variant_limit:
+        logger.debug(
+            f"[bdh-bridge] variants truncated from {len(deduped)} to {variant_limit}"
+        )
+        deduped = deduped[:variant_limit]
 
     search_query = deduped[0] if deduped else original_query
     sub_queries = deduped[1:] if len(deduped) > 1 else []
 
     return {
-        "should_query": bool(result.get("should_query", True)),
+        "schema_version": 2 if is_v2 else 1,
+        "should_retrieve": should_retrieve,
+        "store_candidate": store_candidate,
+        # Keep the v1 alias in normalized output for callers/tests that have
+        # not migrated yet. New code must use should_retrieve explicitly.
+        "should_query": should_retrieve,
         "query": original_query,
         "search_query": search_query,
         "sub_queries": sub_queries,
+        "knowledge_types": _normalize_knowledge_types(result.get("knowledge_types")),
+        "confidence": _normalize_confidence(result.get("confidence")),
     }
 
 
@@ -375,21 +515,37 @@ def _remember_turn_state(kwargs, user_message):
             "created_at": now,
             "user_message": user_message,
             "rewritten_query": "",
+            "should_retrieve": None,
+            "store_candidate": None,
+            # Legacy alias retained for old callers during the v1→v2 rollout.
             "should_query": None,
         }
         _cleanup_turn_states_locked(now)
 
 
-def _update_turn_state(kwargs, rewritten_query, should_query):
-    """Attach rewrite classification to the state captured for this turn."""
+def _update_turn_state(kwargs, rewritten_query, should_retrieve,
+                       store_candidate=None):
+    """Attach v2 routing decisions to the state captured for this turn.
+
+    ``store_candidate`` defaults to the v1 coupled behavior when omitted, so
+    existing integrations can migrate without changing their call signature.
+    """
     key = _turn_state_key(kwargs)
     if key is None:
+        return
+    if not isinstance(should_retrieve, bool):
+        return
+    if store_candidate is None:
+        store_candidate = should_retrieve
+    if not isinstance(store_candidate, bool):
         return
     with _bdh_state_lock:
         state = _turn_states.get(key)
         if state is not None:
             state["rewritten_query"] = rewritten_query
-            state["should_query"] = should_query
+            state["should_retrieve"] = should_retrieve
+            state["store_candidate"] = store_candidate
+            state["should_query"] = should_retrieve
 
 
 def _pop_turn_state(kwargs):
@@ -774,26 +930,30 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
 
 
 # ---------------------------------------------------------------------------
-# Query rewrite pipeline (v0.5.0)
+# Query rewrite pipeline (v0.8.0)
 # ---------------------------------------------------------------------------
 
 def _extract_context(conversation_history, n=_CONTEXT_MESSAGES_N,
-                     max_chars=_CONTEXT_MSG_MAX_CHARS):
-    """Extract last N messages from conversation_history as compact text.
+                     max_chars=_CONTEXT_MSG_MAX_CHARS, exclude_message=""):
+    """Extract compact conversational context, excluding the current turn.
 
-    Hermes passes conversation_history in pre_llm_call kwargs. Each entry
-    is typically a dict with 'role' and 'content' keys. We extract just the
-    text, truncated, to give the rewrite LLM enough context without flooding it.
+    Hermes passes conversation_history in pre_llm_call kwargs. Only user and
+    assistant messages are trusted as rewrite evidence; system/tool content is
+    deliberately excluded because it can contain instructions or large payloads.
     """
     if not isinstance(conversation_history, list) or not conversation_history:
         return ""
 
+    # Filter before taking the tail so tool/system entries cannot consume the
+    # context budget or instruct the rewrite model.
+    conversational = [
+        msg for msg in conversation_history
+        if isinstance(msg, dict)
+        and msg.get("role") in {"user", "assistant"}
+    ]
     lines = []
-    # Take the last n messages
-    for msg in conversation_history[-n:]:
-        if not isinstance(msg, dict):
-            continue
-        role = msg.get("role", "?")
+    for msg in conversational[-n:]:
+        role = msg.get("role")
         content = msg.get("content", "")
         # Handle Anthropic block format
         if isinstance(content, list):
@@ -803,7 +963,9 @@ def _extract_context(conversation_history, n=_CONTEXT_MESSAGES_N,
             )
         elif not isinstance(content, str):
             content = str(content)
-        if not content.strip():
+        if not content.strip() or (
+            exclude_message and content.strip() == exclude_message.strip()
+        ):
             continue
         # Truncate long messages
         snippet = content[:max_chars]
@@ -828,8 +990,9 @@ def _rewrite_query(user_message, context_text=""):
     """Call the rewrite LLM to classify + rewrite the user message.
 
     Returns a normalized dict with:
-      - should_query: bool (whether BDH should be queried)
-      - query: str (rewritten query in user's language, or original if fallback)
+      - should_retrieve: bool (whether BDH should be queried)
+      - store_candidate: bool (whether the turn may enter the write path)
+      - query: str (canonical query in user's language, or original if fallback)
       - search_query: str (optimized English/keyword query for BDH retrieval)
       - sub_queries: list[str] (additional search queries if multi-topic)
 
@@ -866,6 +1029,13 @@ def _rewrite_query(user_message, context_text=""):
         "stream": False,
         # Force JSON response format if the API supports it
         "format": "json",
+        # Qwen/oMLX must not emit hidden reasoning around the JSON contract.
+        # Ollama-compatible cloud endpoints safely ignore this provider-specific
+        # template hint when they do not implement it.
+        "chat_template_kwargs": {
+            "enable_thinking": False,
+            "thinking": False,
+        },
     }
 
     url = f"{_REWRITE_API_URL}/chat/completions"
@@ -905,7 +1075,8 @@ def _rewrite_query(user_message, context_text=""):
             return None
 
         logger.info(
-            f"[bdh-bridge] rewrite: should_query={result['should_query']}, "
+            f"[bdh-bridge] rewrite: should_retrieve={result.get('should_retrieve', result.get('should_query'))}, "
+            f"store_candidate={result.get('store_candidate', result.get('should_query'))}, "
             f"query={result['query'][:80]!r}, search_query={result['search_query'][:80]!r}, "
             f"sub_queries={len(result['sub_queries'])}"
         )
@@ -930,10 +1101,10 @@ def _rewrite_query(user_message, context_text=""):
 def _on_pre_llm_call(**kwargs):
     """Capture the user message and optionally retrieve read-only BDH context.
 
-    v0.5.0: when BDH_QUERY_REWRITE_ENABLED is true, the hook first calls an
-    LLM to classify + rewrite the user message. If the LLM says should_query=false,
-    both read and write paths are skipped (anti-vault-pollution). On any LLM
-    failure, it falls back to the mechanical gate + raw user message.
+    v0.8.0: when BDH_QUERY_REWRITE_ENABLED is true, the hook first calls an
+    LLM to route and rewrite the user message. Retrieval and storage decisions
+    are independent. On any LLM failure, it falls back to the mechanical gate
+    + raw user message.
     """
     try:
         # A new user turn starts here. Clear the previous debug marker so the
@@ -959,37 +1130,68 @@ def _on_pre_llm_call(**kwargs):
         # ── Query rewrite pipeline ──────────────────────────────────────
         bdh_search_query = msg[:1500]
         bdh_query_variants = None
+        should_retrieve = None
+        store_candidate = None
         if _QUERY_REWRITE_ENABLED:
             # Extract context from conversation_history
-            context_text = _extract_context(kwargs.get("conversation_history"))
+            context_text = _extract_context(
+                kwargs.get("conversation_history"), exclude_message=msg
+            )
 
             # Call the rewrite LLM (classify + rewrite in one shot)
             rewrite_result = _rewrite_query(msg, context_text)
 
             if rewrite_result is not None:
-                _update_turn_state(
-                    kwargs,
-                    rewrite_result["query"],
-                    rewrite_result["should_query"],
+                should_retrieve = rewrite_result.get(
+                    "should_retrieve", rewrite_result.get("should_query")
                 )
+                store_candidate = rewrite_result.get(
+                    "store_candidate", should_retrieve
+                )
+                # A monkeypatched/third-party rewrite adapter is still held to
+                # the same strict contract as the built-in parser.
+                if (
+                    not isinstance(should_retrieve, bool)
+                    or not isinstance(store_candidate, bool)
+                ):
+                    logger.warning(
+                        "[bdh-bridge] rewrite returned invalid routing booleans — fallback to raw"
+                    )
+                    rewrite_result = None
+                else:
+                    _update_turn_state(
+                        kwargs,
+                        rewrite_result.get("query", ""),
+                        should_retrieve,
+                        store_candidate,
+                    )
 
-                if not rewrite_result["should_query"]:
-                    logger.info("[bdh-bridge] rewrite: LLM classified as non-knowledge — skip read+write")
+            if rewrite_result is not None:
+                if not should_retrieve:
+                    logger.info(
+                        "[bdh-bridge] rewrite: retrieval disabled; "
+                        f"store_candidate={store_candidate}"
+                    )
                     return None
 
                 # Keep the rewritten user-language query as the canonical seed.
                 # Send translated/sub-query outputs as independent structured
                 # variants so BDH can fuse results instead of receiving keyword soup.
                 bdh_search_query = rewrite_result["query"][:1500]
-                bdh_query_variants = [
-                    {"query": rewrite_result["search_query"][:1500],
-                     "language": "rewrite", "weight": 1.0}
-                ]
+                bdh_query_variants = []
+                if rewrite_result.get("search_query"):
+                    bdh_query_variants.append({
+                        "query": rewrite_result["search_query"][:1500],
+                        "language": "rewrite",
+                        "weight": 1.0,
+                    })
                 bdh_query_variants.extend(
                     {"query": variant[:1500], "language": "rewrite", "weight": 1.0}
                     for variant in rewrite_result.get("sub_queries", [])
                     if isinstance(variant, str) and variant.strip()
                 )
+                if not bdh_query_variants:
+                    bdh_query_variants = None
             else:
                 # Fallback: LLM failed, use mechanical gate + raw message
                 if not _should_auto_retrieve(msg):
@@ -1034,7 +1236,7 @@ def _on_post_api_request(**kwargs):
         # not leave cross-turn state behind.
         turn_state = _pop_turn_state(kwargs)
         finish_reason = kwargs.get("finish_reason", "")
-        if finish_reason not in ("stop", "length"):
+        if finish_reason != "stop":
             return
 
         assistant_msg = kwargs.get("assistant_message")
@@ -1077,11 +1279,13 @@ def _on_post_api_request(**kwargs):
             logger.info("[bdh-bridge] write skipped — cron source is deny-by-default")
             return
 
-        # v0.5.0: if classification said should_query=false, skip the write too.
-        # This prevents operational noise from polluting the vault via the
-        # write path even when the read path was already skipped.
-        if turn_state["should_query"] is False:
-            logger.info("[bdh-bridge] write skipped — LLM classified as non-knowledge")
+        # v0.8.0: retrieval and storage are independent decisions. The legacy
+        # alias is checked only for callers that populated old turn state.
+        store_candidate = turn_state.get("store_candidate")
+        if store_candidate is None:
+            store_candidate = turn_state.get("should_query")
+        if store_candidate is False:
+            logger.info("[bdh-bridge] write skipped — store_candidate=false")
             return
 
         # Use the USER MESSAGE as the embedding seed (query) — that's the signal.
@@ -1298,8 +1502,8 @@ _BDH_STATS_SCHEMA = {
 # Minimal plugin metadata returned for Hermes introspection.
 PLUGIN = {
     "name": "bdh-bridge",
-    "version": "0.7.1",
-    "description": "Bidirectional Hermes ↔ BDH Graph Harness bridge with query rewrite, normalization, session synthesis, and lifecycle hooks.",
+    "version": "0.8.0",
+    "description": "Bidirectional Hermes ↔ BDH Graph Harness bridge with independent rewrite routing, normalization, session synthesis, and lifecycle hooks.",
 }
 
 

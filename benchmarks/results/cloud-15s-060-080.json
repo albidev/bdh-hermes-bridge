@@ -1,0 +1,538 @@
+{
+  "backend": "cloud",
+  "endpoint": "https://ollama.com/v1",
+  "model": "deepseek-v4-flash:cloud",
+  "goldenset_slice": {
+    "start": "q061",
+    "count": 20
+  },
+  "read_only": true,
+  "summary": {
+    "n": 20,
+    "errors": 0,
+    "mean_seconds": 5.278,
+    "p50_seconds": 3.342,
+    "p95_seconds": 11.732,
+    "max_seconds": 12.731,
+    "context_hits": 10,
+    "context_hit_rate": 0.5,
+    "route_accuracy": 0.85,
+    "anchor_recall_mean": 0.967,
+    "variant_bound_accuracy": 0.85,
+    "by_category": {
+      "multi_topic": {
+        "n": 10,
+        "mean_seconds": 7.873,
+        "context_hits": 9
+      },
+      "operational_noise": {
+        "n": 10,
+        "mean_seconds": 2.683,
+        "context_hits": 1
+      }
+    },
+    "rewrite_successes": 20,
+    "rewrite_success_rate": 1.0
+  },
+  "rows": [
+    {
+      "id": "q061",
+      "category": "operational_noise",
+      "elapsed_seconds": 2.963,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Ok perfetto, procedi.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 0.0,
+        "provider_elapsed_seconds": 2.963
+      },
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q062",
+      "category": "operational_noise",
+      "elapsed_seconds": 1.673,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Riavvia il gateway Hermes.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 1.673
+      },
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q063",
+      "category": "operational_noise",
+      "elapsed_seconds": 2.512,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Pusha il branch quando hai finito.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 2.511
+      },
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q064",
+      "category": "operational_noise",
+      "elapsed_seconds": 2.07,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Controlla se la porta 8643 è aperta adesso.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 2.07
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q065",
+      "category": "operational_noise",
+      "elapsed_seconds": 3.055,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Che ore sono?",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 3.055
+      },
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q066",
+      "category": "operational_noise",
+      "elapsed_seconds": 2.725,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Grazie mille.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 2.725
+      },
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q067",
+      "category": "operational_noise",
+      "elapsed_seconds": 2.159,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Esegui i test.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 2.159
+      },
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q068",
+      "category": "operational_noise",
+      "elapsed_seconds": 5.947,
+      "context_injected": true,
+      "context_chars": 463,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "stato corrente integrazione BDH e bridge",
+        "search_query": "current state BDH integration bridge",
+        "sub_queries": [
+          "stato corrente integrazione BDH",
+          "stato corrente bridge"
+        ],
+        "knowledge_types": [
+          "project_context",
+          "architecture_choice"
+        ],
+        "confidence": 0.7,
+        "provider_elapsed_seconds": 5.138
+      },
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q069",
+      "category": "operational_noise",
+      "elapsed_seconds": 2.21,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Vai avanti con il prossimo task.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 2.21
+      },
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q070",
+      "category": "operational_noise",
+      "elapsed_seconds": 1.517,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": false,
+        "should_query": false,
+        "query": "Ciao, ci sentiamo dopo.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 1.517
+      },
+      "mechanical_retrieve": false,
+      "error": null
+    },
+    {
+      "id": "q071",
+      "category": "multi_topic",
+      "elapsed_seconds": 12.731,
+      "context_injected": true,
+      "context_chars": 549,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Abbiamo corretto il fallback BDH→oMLX e ora vorrei capire se il rewrite può usare il contesto della sessione.",
+        "search_query": "rewrite session context BDH fallback",
+        "sub_queries": [
+          "rewrite using session context",
+          "BDH fallback oMLX correction"
+        ],
+        "knowledge_types": [
+          "architecture",
+          "decision",
+          "fact"
+        ],
+        "confidence": 0.8,
+        "provider_elapsed_seconds": 11.562
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q072",
+      "category": "multi_topic",
+      "elapsed_seconds": 3.33,
+      "context_injected": true,
+      "context_chars": 532,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Confronta la persistenza tldraw con il lifecycle dell’avatar e proponi cosa documentare nel vault.",
+        "search_query": "tldraw persistence avatar lifecycle documentation vault",
+        "sub_queries": [
+          "tldraw persistence mechanism and data model",
+          "avatar lifecycle states and transitions"
+        ],
+        "knowledge_types": [
+          "comparison",
+          "documentation",
+          "architecture",
+          "decision"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 3.064
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q073",
+      "category": "multi_topic",
+      "elapsed_seconds": 9.881,
+      "context_injected": true,
+      "context_chars": 491,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Verificare se la scelta di Tauri è coerente con il bridge SSE",
+        "search_query": "scelta Tauri bridge SSE coerenza",
+        "sub_queries": [
+          "contesto decisione Tauri",
+          "architettura bridge SSE"
+        ],
+        "knowledge_types": [
+          "decision",
+          "architecture"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 8.526
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q074",
+      "category": "multi_topic",
+      "elapsed_seconds": 5.105,
+      "context_injected": true,
+      "context_chars": 544,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Il bug WebGL è risolto, la lezione va collegata alla gestione delle cache di Safari.",
+        "search_query": "WebGL bug Safari cache management",
+        "sub_queries": [
+          "WebGL bug Safari cache",
+          "lezione appresa gestione cache Safari"
+        ],
+        "knowledge_types": [
+          "lesson_learned",
+          "bug_fix",
+          "technical_issue"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 5.005
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q075",
+      "category": "multi_topic",
+      "elapsed_seconds": 4.83,
+      "context_injected": true,
+      "context_chars": 547,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Spiegami sia il read path di BDH sia il motivo per cui il write path deve conservare la lingua dell’utente.",
+        "search_query": "BDH read path write path lingua utente",
+        "sub_queries": [
+          "BDH read path spiegazione",
+          "BDH write path conservazione lingua utente motivo"
+        ],
+        "knowledge_types": [
+          "architecture",
+          "decisions",
+          "concepts"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 3.39
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q076",
+      "category": "multi_topic",
+      "elapsed_seconds": 3.354,
+      "context_injected": true,
+      "context_chars": 572,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Se il modello cloud va in rate limit, dobbiamo usare oMLX locale e mantenere comunque l’output JSON.",
+        "search_query": "cloud model rate limit fallback local MLX JSON output",
+        "sub_queries": [
+          "fallback strategy when cloud model rate limited",
+          "local MLX model usage for JSON output"
+        ],
+        "knowledge_types": [
+          "decision",
+          "architecture",
+          "strategy"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 2.522
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q077",
+      "category": "multi_topic",
+      "elapsed_seconds": 8.494,
+      "context_injected": true,
+      "context_chars": 519,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Quella decisione di ieri sul vault episodico vale anche per il nuovo progetto Morning Signal?",
+        "search_query": "vault episodico decisione Morning Signal",
+        "sub_queries": [
+          "decisione vault episodico",
+          "progetto Morning Signal"
+        ],
+        "knowledge_types": [
+          "decision",
+          "project_context",
+          "architecture_choice"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 8.371
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q078",
+      "category": "multi_topic",
+      "elapsed_seconds": 11.207,
+      "context_injected": true,
+      "context_chars": 540,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Aggiungere il problema del context leak alla lesson sul cross-session state",
+        "search_query": "cross-session state lesson",
+        "sub_queries": [
+          "cross-session state",
+          "context leak"
+        ],
+        "knowledge_types": [],
+        "confidence": 0.8,
+        "provider_elapsed_seconds": 10.758
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q079",
+      "category": "multi_topic",
+      "elapsed_seconds": 8.122,
+      "context_injected": true,
+      "context_chars": 603,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Come colleghiamo i concetti di query rewriting, neurogenesis e anti-pollution senza confondere retrieval e learning?",
+        "search_query": "query rewriting neurogenesis anti-pollution retrieval learning connection",
+        "sub_queries": [
+          "query rewriting and anti-pollution in knowledge graph",
+          "neurogenesis and learning in knowledge graph"
+        ],
+        "knowledge_types": [
+          "concept_relationship",
+          "strategy",
+          "decision"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 7.992
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q080",
+      "category": "multi_topic",
+      "elapsed_seconds": 11.679,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Come devono essere instradate una decisione di prodotto e una correzione di codice nella stessa frase?",
+        "search_query": "routing mixed content product decision code fix",
+        "sub_queries": [
+          "routing product decision and code fix together",
+          "handling mixed content in knowledge graph"
+        ],
+        "knowledge_types": [
+          "decision",
+          "strategy"
+        ],
+        "confidence": 0.6,
+        "provider_elapsed_seconds": 11.378
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    }
+  ],
+  "rewrite_timeout_seconds": 15,
+  "goldenset": {
+    "path": "/Users/albi/Projects/bdh-hermes-bridge-query-contract/benchmarks/query_rewrite_goldenset.json",
+    "version": 1,
+    "size": 100,
+    "slice_start_index": 60,
+    "slice_count": 20
+  }
+}

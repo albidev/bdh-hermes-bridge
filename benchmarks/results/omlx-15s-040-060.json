@@ -1,0 +1,573 @@
+{
+  "backend": "omlx",
+  "endpoint": "http://127.0.0.1:8083/v1",
+  "model": "qwen3.8-27b-oq4e-mtp",
+  "goldenset_slice": {
+    "start": "q041",
+    "count": 20
+  },
+  "read_only": true,
+  "summary": {
+    "n": 20,
+    "errors": 0,
+    "mean_seconds": 7.689,
+    "p50_seconds": 7.51,
+    "p95_seconds": 8.9,
+    "max_seconds": 9.327,
+    "context_hits": 11,
+    "context_hit_rate": 0.55,
+    "route_accuracy": 0.65,
+    "anchor_recall_mean": 0.921,
+    "variant_bound_accuracy": 0.2,
+    "by_category": {
+      "durable_nontechnical": {
+        "n": 10,
+        "mean_seconds": 7.384,
+        "context_hits": 3
+      },
+      "project_context": {
+        "n": 10,
+        "mean_seconds": 7.994,
+        "context_hits": 8
+      }
+    },
+    "rewrite_successes": 20,
+    "rewrite_success_rate": 1.0
+  },
+  "rows": [
+    {
+      "id": "q041",
+      "category": "project_context",
+      "elapsed_seconds": 7.328,
+      "context_injected": true,
+      "context_chars": 497,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Come funziona la persistenza del whiteboard tldraw in Mission Control?",
+        "search_query": "Mission Control tldraw whiteboard persistence mechanism",
+        "sub_queries": [
+          "Mission Control tldraw whiteboard persistence",
+          "Mission Control whiteboard data storage"
+        ],
+        "knowledge_types": [
+          "architecture",
+          "project_context"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 7.229
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q042",
+      "category": "project_context",
+      "elapsed_seconds": 8.877,
+      "context_injected": true,
+      "context_chars": 522,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Mission Control deve mostrare il task Done finché l’utente non apre la chat e arriva in fondo",
+        "search_query": "Mission Control task Done visibility chat scroll bottom UI behavior",
+        "sub_queries": [
+          "Mission Control UI task status visibility",
+          "Chat interface scroll behavior task completion"
+        ],
+        "knowledge_types": [
+          "architecture_choice",
+          "project_context"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 7.792
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q043",
+      "category": "project_context",
+      "elapsed_seconds": 8.232,
+      "context_injected": true,
+      "context_chars": 523,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Perché l’avatar ESP32 usa sprite RGB565 pre-renderizzati?",
+        "search_query": "ESP32 avatar RGB565 pre-renderized sprites architecture decision",
+        "sub_queries": [
+          "ESP32 avatar rendering strategy RGB565",
+          "BDH bridge avatar asset format choice"
+        ],
+        "knowledge_types": [
+          "architecture_choice",
+          "decision"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 8.154
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q044",
+      "category": "project_context",
+      "elapsed_seconds": 8.661,
+      "context_injected": true,
+      "context_chars": 492,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "L’avatar deve dare priorità al lifecycle state rispetto al mood testuale.",
+        "search_query": "avatar priority lifecycle state vs textual mood BDH bridge integration",
+        "sub_queries": [
+          "avatar lifecycle state priority",
+          "BDH bridge integration context preservation"
+        ],
+        "knowledge_types": [
+          "decision",
+          "architecture_choice"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 7.534
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q045",
+      "category": "project_context",
+      "elapsed_seconds": 7.612,
+      "context_injected": true,
+      "context_chars": 476,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Come funziona il flusso SSE tra Mission Control e Avatar Companion?",
+        "search_query": "SSE flow Mission Control Avatar Companion integration architecture",
+        "sub_queries": [
+          "Mission Control Avatar Companion SSE communication protocol",
+          "BDH bridge SSE data flow architecture"
+        ],
+        "knowledge_types": [
+          "architecture",
+          "project_context"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 7.534
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q046",
+      "category": "project_context",
+      "elapsed_seconds": 6.751,
+      "context_injected": true,
+      "context_chars": 514,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Il bridge avatar usa Tailscale per esporre gli eventi SSE al companion mobile.",
+        "search_query": "avatar bridge Tailscale SSE companion mobile architecture",
+        "sub_queries": [
+          "avatar bridge Tailscale SSE mobile companion",
+          "BDH integration bridge architecture"
+        ],
+        "knowledge_types": [
+          "architecture",
+          "project_context"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 6.655
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q047",
+      "category": "project_context",
+      "elapsed_seconds": 6.94,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Qual è la struttura corretta della pagina Task Inspector?",
+        "search_query": "Task Inspector page structure layout architecture",
+        "sub_queries": [
+          "Task Inspector UI structure",
+          "Task Inspector component hierarchy"
+        ],
+        "knowledge_types": [
+          "architecture",
+          "project_context"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 6.881
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q048",
+      "category": "project_context",
+      "elapsed_seconds": 8.846,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Il Kanban usa worktree isolati per evitare conflitti tra worker concorrenti.",
+        "search_query": "Kanban worktree isolation concurrent workers conflict avoidance",
+        "sub_queries": [
+          "Kanban architecture worktree isolation",
+          "Concurrent worker conflict resolution strategy"
+        ],
+        "knowledge_types": [
+          "architecture_choice",
+          "decision"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 7.481
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q049",
+      "category": "project_context",
+      "elapsed_seconds": 7.883,
+      "context_injected": true,
+      "context_chars": 470,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Come funzionano le traduzioni i18n tra i cataloghi EN e IT?",
+        "search_query": "i18n translation mechanism EN IT catalogs localization workflow",
+        "sub_queries": [
+          "i18n architecture EN IT catalog synchronization",
+          "localization strategy translation workflow"
+        ],
+        "knowledge_types": [
+          "architecture",
+          "workflow"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 7.782
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q050",
+      "category": "project_context",
+      "elapsed_seconds": 8.807,
+      "context_injected": true,
+      "context_chars": 483,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "La UI di Mission Control non deve contenere stringhe hardcoded fuori dai cataloghi.",
+        "search_query": "Mission Control UI hardcoded strings i18n localization catalog constraints",
+        "sub_queries": [
+          "Mission Control UI architecture constraints",
+          "Internationalization i18n string management policy"
+        ],
+        "knowledge_types": [
+          "architecture_choice",
+          "constraint"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 8.264
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q051",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 6.79,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": true,
+        "should_query": false,
+        "query": "La strategia del progetto è costruire sistemi self-learning incrementali: ricerca, vault, PoC, fix, estensione.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [
+          "strategy",
+          "project_context"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 6.79
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q052",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 7.661,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Qual è il metodo che usiamo per trasformare una ricerca in conoscenza riutilizzabile?",
+        "search_query": "method transform research into reusable knowledge workflow",
+        "sub_queries": [
+          "knowledge extraction process",
+          "research to knowledge pipeline"
+        ],
+        "knowledge_types": [
+          "workflow",
+          "strategy"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 7.583
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q053",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 6.578,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": true,
+        "should_query": false,
+        "query": "Preferisco risposte concise in italiano con profondità tecnica e senza teatro di cortesia.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [
+          "user_preference"
+        ],
+        "confidence": 1.0,
+        "provider_elapsed_seconds": 6.578
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q054",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 9.327,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Come distinguiamo una decisione durevole da uno stato temporaneo del lavoro?",
+        "search_query": "criteria durable decision vs transient work state BDH bridge integration",
+        "sub_queries": [
+          "BDH bridge integration durable decisions",
+          "distinction between permanent architecture choices and temporary task status"
+        ],
+        "knowledge_types": [
+          "decisions",
+          "architecture choices"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 8.663
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q055",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 7.408,
+      "context_injected": true,
+      "context_chars": 561,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "La vault Core contiene conoscenza operativa, mentre Episodic conserva consolidamenti giornalieri.",
+        "search_query": "vault Core operational knowledge vs Episodic daily consolidation architecture",
+        "sub_queries": [
+          "vault Core operational knowledge definition",
+          "Episodic vault daily consolidation strategy"
+        ],
+        "knowledge_types": [
+          "architecture",
+          "concept"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 7.349
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q056",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 7.048,
+      "context_injected": true,
+      "context_chars": 485,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Quale ruolo hanno BDH e Honcho nella memoria personale?",
+        "search_query": "BDH Honcho personal memory role integration",
+        "sub_queries": [
+          "BDH personal memory role",
+          "Honcho personal memory role"
+        ],
+        "knowledge_types": [
+          "concept",
+          "architecture_choice"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 6.944
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q057",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 6.627,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": true,
+        "should_query": false,
+        "query": "La strategia è non promuovere mai un’ipotesi non verificata a decisione.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [
+          "strategy"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 6.627
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q058",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 6.875,
+      "context_injected": true,
+      "context_chars": 536,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": true,
+        "should_query": true,
+        "query": "Come documentare una lesson learned senza trasformare il vault in un archivio di transcript",
+        "search_query": "lesson learned documentation strategy vault transcript avoidance",
+        "sub_queries": [
+          "vault documentation best practices",
+          "lesson learned extraction from conversation"
+        ],
+        "knowledge_types": [
+          "strategy",
+          "workflow"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 6.764
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q059",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 6.929,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": false,
+        "store_candidate": true,
+        "should_query": false,
+        "query": "Il progetto privilegia integrità dei dati e backup prima di ogni operazione distruttiva.",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": [
+          "decision",
+          "strategy"
+        ],
+        "confidence": 0.95,
+        "provider_elapsed_seconds": 6.928
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    },
+    {
+      "id": "q060",
+      "category": "durable_nontechnical",
+      "elapsed_seconds": 8.596,
+      "context_injected": false,
+      "context_chars": 0,
+      "rewrite": {
+        "schema_version": 2,
+        "should_retrieve": true,
+        "store_candidate": false,
+        "should_query": true,
+        "query": "Quali criteri usiamo per decidere se una scoperta merita di entrare nella memoria durevole?",
+        "search_query": "criteria for durable memory storage discovery filtering BDH integration bridge",
+        "sub_queries": [
+          "BDH integration bridge context preservation criteria",
+          "durable memory storage decision rules"
+        ],
+        "knowledge_types": [
+          "strategy",
+          "decision"
+        ],
+        "confidence": 0.9,
+        "provider_elapsed_seconds": 8.022
+      },
+      "mechanical_retrieve": true,
+      "error": null
+    }
+  ],
+  "rewrite_timeout_seconds": 15,
+  "goldenset": {
+    "path": "/Users/albi/Projects/bdh-hermes-bridge-query-contract/benchmarks/query_rewrite_goldenset.json",
+    "version": 1,
+    "size": 100,
+    "slice_start_index": 40,
+    "slice_count": 20
+  }
+}

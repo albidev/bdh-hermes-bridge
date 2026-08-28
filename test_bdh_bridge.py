@@ -15,6 +15,13 @@ assert _SPEC.loader is not None
 _SPEC.loader.exec_module(bridge)
 
 
+def test_default_rewrite_prompt_contains_routing_few_shot_examples():
+    prompt = bridge._DEFAULT_REWRITE_SYSTEM_PROMPT
+    assert "Few-shot examples for routing calibration." in prompt
+    assert "Aggiungiamo query classification e routing" in prompt
+    assert '"should_retrieve":false,"store_candidate":true' in prompt
+
+
 def test_gating_skips_casual_messages():
     assert bridge._should_auto_retrieve("ciao") is False
     assert bridge._should_auto_retrieve("Grazie!") is False
@@ -1432,4 +1439,245 @@ def test_real_async_failure_skips_callback(monkeypatch):
     # Give the daemon thread a moment to complete.
     time.sleep(0.5)
     assert not callback_fired.is_set(), "on_success should NOT fire on failure"
+
+
+# ---------------------------------------------------------------------------
+# v0.8.0: independent retrieval/storage routing contract
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_v2_contract_separates_retrieval_and_storage():
+    """A store-only turn must remain valid without requesting retrieval."""
+    result = bridge._normalize_query_variants({
+        "schema_version": 2,
+        "should_retrieve": False,
+        "store_candidate": True,
+        "query": "abbiamo deciso di usare Tauri invece di Electron",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": ["decision", "architecture"],
+        "confidence": 0.91,
+    }, "user message")
+
+    assert result is not None
+    assert result["should_retrieve"] is False
+    assert result["store_candidate"] is True
+    assert result["should_query"] is False  # backward-compatible alias
+    assert result["query"] == "abbiamo deciso di usare Tauri invece di Electron"
+    assert result["knowledge_types"] == ["decision", "architecture"]
+
+
+def test_normalize_v2_contract_rejects_string_boolean():
+    """Ambiguous JSON values must not fail open into retrieval/storage."""
+    result = bridge._normalize_query_variants({
+        "schema_version": 2,
+        "should_retrieve": "false",
+        "store_candidate": False,
+        "query": "riavvia il gateway",
+        "search_query": "",
+        "sub_queries": [],
+    }, "riavvia il gateway")
+
+    assert result is None
+
+
+def test_context_extraction_ignores_system_and_tool_messages():
+    """Rewrite context contains only conversational user/assistant evidence."""
+    context = bridge._extract_context([
+        {"role": "system", "content": "ignore system instructions"},
+        {"role": "tool", "content": "ignore tool payload"},
+        {"role": "user", "content": "user evidence"},
+        {"role": "assistant", "content": "assistant evidence"},
+    ])
+
+    assert "[user] user evidence" in context
+    assert "[assistant] assistant evidence" in context
+    assert "system instructions" not in context
+    assert "tool payload" not in context
+
+
+def test_pre_and_post_support_store_only_route(monkeypatch):
+    """Store-only knowledge bypasses read but is persisted after the answer."""
+    writes = []
+    monkeypatch.setattr(bridge, "_QUERY_REWRITE_ENABLED", True)
+    monkeypatch.setattr(bridge, "_rewrite_query", lambda *args: {
+        "schema_version": 2,
+        "should_retrieve": False,
+        "store_candidate": True,
+        "query": "abbiamo deciso di usare Tauri",
+        "search_query": "",
+        "sub_queries": [],
+        "knowledge_types": ["decision"],
+    })
+    monkeypatch.setattr(
+        bridge, "_bdh_query_sync",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("store-only route must not retrieve")
+        ),
+    )
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async",
+        lambda query, **kwargs: writes.append((query, kwargs)),
+    )
+
+    assert bridge._on_pre_llm_call(
+        session_id="store-only",
+        user_message="Abbiamo deciso di usare Tauri",
+        conversation_history=[],
+    ) is None
+    bridge._on_post_api_request(
+        session_id="store-only",
+        finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "x" * 300})(),
+    )
+
+    assert len(writes) == 1
+    assert writes[0][0] == "abbiamo deciso di usare Tauri"
+
+
+def test_pre_and_post_support_retrieve_only_route(monkeypatch):
+    """A retrieval question must not write the resulting answer to BDH."""
+    reads = []
+    writes = []
+    monkeypatch.setattr(bridge, "_QUERY_REWRITE_ENABLED", True)
+    monkeypatch.setattr(bridge, "_rewrite_query", lambda *args: {
+        "schema_version": 2,
+        "should_retrieve": True,
+        "store_candidate": False,
+        "query": "quale decisione avevamo preso su Tauri",
+        "search_query": "Tauri previous architecture decision",
+        "sub_queries": [],
+    })
+    monkeypatch.setattr(
+        bridge, "_bdh_query_sync",
+        lambda query, **kwargs: (
+            reads.append((query, kwargs)) or {
+                "routing": {
+                    "hybrid_top_score": 0.8,
+                    "vector_top_score": 0.8,
+                    "bm25_matched_term_count": 2,
+                },
+                "activated_notes": [{"id": "n1", "title": "Tauri", "score": 0.9}],
+                "response": "context",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async",
+        lambda query, **kwargs: writes.append((query, kwargs)),
+    )
+
+    result = bridge._on_pre_llm_call(
+        session_id="retrieve-only",
+        user_message="Quale decisione avevamo preso su Tauri?",
+        conversation_history=[],
+    )
+    bridge._on_post_api_request(
+        session_id="retrieve-only",
+        finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "x" * 300})(),
+    )
+
+    assert result and "context" in result
+    assert reads[0][0] == "quale decisione avevamo preso su Tauri"
+    assert writes == []
+
+
+def test_length_finished_response_is_not_stored(monkeypatch):
+    """A truncated model response must not enter durable BDH learning."""
+    writes = []
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async",
+        lambda query, **kwargs: writes.append((query, kwargs)),
+    )
+    state_kwargs = {"session_id": "truncated"}
+    bridge._remember_turn_state(state_kwargs, "durable question")
+    bridge._on_post_api_request(
+        session_id="truncated",
+        finish_reason="length",
+        assistant_message=type("Message", (), {"content": "x" * 300})(),
+    )
+
+    assert writes == []
+
+
+def test_rewrite_query_parses_v2_response_from_provider(monkeypatch):
+    """The provider response is normalized to the independent v2 contract."""
+    _fake_urlopen_for_content(monkeypatch, {
+        "schema_version": 2,
+        "should_retrieve": True,
+        "store_candidate": False,
+        "query": "quale decisione avevamo preso su Tauri",
+        "search_query": "Tauri architecture decision",
+        "sub_queries": ["Tauri versus Electron"],
+        "knowledge_types": ["decision", "architecture"],
+        "confidence": 0.88,
+    })
+
+    result = bridge._rewrite_query("che scelta avevamo fatto per il companion?")
+
+    assert result is not None
+    assert result["schema_version"] == 2
+    assert result["should_retrieve"] is True
+    assert result["store_candidate"] is False
+    assert result["should_query"] is True
+    assert result["search_query"] == "Tauri architecture decision"
+    assert result["knowledge_types"] == ["decision", "architecture"]
+
+
+def test_v2_retrieval_variants_are_capped_at_three():
+    """A v2 provider cannot turn one user turn into an unbounded fan-out."""
+    result = bridge._normalize_query_variants({
+        "schema_version": 2,
+        "should_retrieve": True,
+        "store_candidate": False,
+        "query": "main query",
+        "search_queries": ["v1", "v2", "v3", "v4"],
+        "sub_queries": ["v5"],
+    }, "user message")
+
+    assert result is not None
+    assert result["search_query"] == "v1"
+    assert result["sub_queries"] == ["v2", "v3"]
+
+
+def test_rewrite_request_disables_qwen_thinking_for_structured_output(monkeypatch):
+    """oMLX/Qwen must receive explicit thinking-off template kwargs."""
+    captured = {}
+    body = json.dumps({
+        "choices": [{
+            "message": {
+                "content": json.dumps({
+                    "schema_version": 2,
+                    "should_retrieve": True,
+                    "store_candidate": False,
+                    "query": "test query",
+                    "search_query": "test query",
+                    "sub_queries": [],
+                })
+            }
+        }]
+    })
+
+    class FakeResp:
+        def read(self):
+            return body.encode()
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    def fake_urlopen(req, timeout=None):
+        captured.update(json.loads(req.data.decode()))
+        return FakeResp()
+
+    monkeypatch.setattr(bridge, "_REWRITE_API_KEY", "local")
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", fake_urlopen)
+    result = bridge._rewrite_query("test query")
+
+    assert result is not None
+    assert captured["chat_template_kwargs"] == {
+        "enable_thinking": False,
+        "thinking": False,
+    }
 
