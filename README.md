@@ -122,7 +122,7 @@ python3 benchmarks/run_query_rewrite_benchmark.py \
   --output benchmarks/results/omlx-15s-000-020.json
 ```
 
-The active benchmark uses local oMLX/Qwen (`127.0.0.1:8083`, model `qwen3.8-27b-oq4e-mtp`) or Ollama Cloud when explicitly selected with `--backend cloud`. Reports include total serial wall time, p50/p95 latency, rewrite success, routing accuracy, context hits, and variant bounds.
+The active benchmark uses local oMLX/Qwen (`127.0.0.1:8083`, model `qwen3.8-27b-oq4e-mtp`) or Ollama Cloud when explicitly selected with `--backend cloud`. Reports include total serial wall time, p50/p95 latency, rewrite success, routing accuracy, context hits, and variant bounds. Reports generated against goldenset v1 are superseded: v2 fixes duplicate IDs in the final 20 cases.
 
 **Default classification prompt:**
 

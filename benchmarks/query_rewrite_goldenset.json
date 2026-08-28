@@ -1,7 +1,7 @@
 {
   "name": "bdh-query-rewrite-goldenset",
-  "version": 1,
-  "description": "Curated Italian/English evaluation set for BDH rewrite routing. Expected labels are human-authored; anchors are semantic retrieval checks.",
+  "version": 2,
+  "description": "Curated Italian/English evaluation set for BDH rewrite routing. Expected labels are human-authored; anchors are semantic retrieval checks. IDs are unique across all 100 cases.",
   "size": 100,
   "fields": {
     "should_retrieve": "Whether the current turn should perform BDH read retrieval.",
@@ -1175,7 +1175,7 @@
       }
     },
     {
-      "id": "q001",
+      "id": "q081",
       "category": "context_edge",
       "message": "Quella scelta che avevamo fatto per il modello locale vale ancora dopo il passaggio a oMLX?",
       "expected": {
@@ -1190,7 +1190,7 @@
       }
     },
     {
-      "id": "q002",
+      "id": "q082",
       "category": "context_edge",
       "message": "Confermo che la query originale deve restare disponibile anche quando usiamo una search_query tradotta.",
       "expected": {
@@ -1205,7 +1205,7 @@
       }
     },
     {
-      "id": "q003",
+      "id": "q083",
       "category": "context_edge",
       "message": "Non è una decisione: sto solo facendo una prova di latenza del bridge.",
       "expected": {
@@ -1216,7 +1216,7 @@
       }
     },
     {
-      "id": "q004",
+      "id": "q084",
       "category": "context_edge",
       "message": "Ricordami se il contesto BDH viene inserito nel system prompt permanente o solo nel turno corrente.",
       "expected": {
@@ -1231,7 +1231,7 @@
       }
     },
     {
-      "id": "q005",
+      "id": "q085",
       "category": "context_edge",
       "message": "La query canonica deve rimanere in italiano mentre la variante di ricerca può essere in inglese.",
       "expected": {
@@ -1247,7 +1247,7 @@
       }
     },
     {
-      "id": "q006",
+      "id": "q086",
       "category": "context_edge",
       "message": "Se il rewrite aggiunge concetti che non erano nel messaggio, come impediamo che diventino fatti nel vault?",
       "expected": {
@@ -1263,7 +1263,7 @@
       }
     },
     {
-      "id": "q007",
+      "id": "q087",
       "category": "context_edge",
       "message": "Abbiamo trovato il problema: il modello produce JSON con thinking attivo e il parser lo rifiuta.",
       "expected": {
@@ -1278,7 +1278,7 @@
       }
     },
     {
-      "id": "q008",
+      "id": "q088",
       "category": "context_edge",
       "message": "Che cosa è cambiato nel contratto tra should_query e should_retrieve?",
       "expected": {
@@ -1293,7 +1293,7 @@
       }
     },
     {
-      "id": "q009",
+      "id": "q089",
       "category": "context_edge",
       "message": "Questo messaggio non deve essere salvato nel vault, è solo una nota temporanea per questa sessione.",
       "expected": {
@@ -1304,7 +1304,7 @@
       }
     },
     {
-      "id": "q010",
+      "id": "q090",
       "category": "context_edge",
       "message": "Il fallback locale deve mantenere la stessa query e non cambiare il significato della richiesta.",
       "expected": {
@@ -1319,7 +1319,7 @@
       }
     },
     {
-      "id": "q011",
+      "id": "q091",
       "category": "routing_policy",
       "message": "Puoi eseguire il benchmark completo e salvarne il report nel branch?",
       "expected": {
@@ -1330,7 +1330,7 @@
       }
     },
     {
-      "id": "q012",
+      "id": "q092",
       "category": "routing_policy",
       "message": "Controlla i log di oMLX e dimmi se il server è healthy.",
       "expected": {
@@ -1341,7 +1341,7 @@
       }
     },
     {
-      "id": "q013",
+      "id": "q093",
       "category": "routing_policy",
       "message": "Fammi un riepilogo delle decisioni prese sul query rewriting di BDH.",
       "expected": {
@@ -1356,7 +1356,7 @@
       }
     },
     {
-      "id": "q014",
+      "id": "q094",
       "category": "routing_policy",
       "message": "Metti questa decisione nella memoria durevole: il retrieval e il learning sono indipendenti.",
       "expected": {
@@ -1371,7 +1371,7 @@
       }
     },
     {
-      "id": "q015",
+      "id": "q095",
       "category": "routing_policy",
       "message": "Non salvare questa frase, serve solo a verificare il comportamento del classificatore.",
       "expected": {
@@ -1382,7 +1382,7 @@
       }
     },
     {
-      "id": "q016",
+      "id": "q096",
       "category": "routing_policy",
       "message": "Ricordi perché abbiamo scelto di usare conversation_history invece di state.db?",
       "expected": {
@@ -1396,7 +1396,7 @@
       }
     },
     {
-      "id": "q017",
+      "id": "q097",
       "category": "routing_policy",
       "message": "Sì, è quella la decisione definitiva: usiamo oMLX locale per Qwen.",
       "expected": {
@@ -1411,7 +1411,7 @@
       }
     },
     {
-      "id": "q018",
+      "id": "q098",
       "category": "routing_policy",
       "message": "Crea un commit con queste modifiche e poi fai push.",
       "expected": {
@@ -1422,7 +1422,7 @@
       }
     },
     {
-      "id": "q019",
+      "id": "q099",
       "category": "routing_policy",
       "message": "Cosa ne pensi del fatto che il rewrite costi diversi secondi per ogni messaggio?",
       "expected": {
@@ -1437,7 +1437,7 @@
       }
     },
     {
-      "id": "q020",
+      "id": "q100",
       "category": "routing_policy",
       "message": "Abbiamo chiuso il contratto v2 e il test end-to-end è passato.",
       "expected": {

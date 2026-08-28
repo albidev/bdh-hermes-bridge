@@ -1,0 +1,113 @@
+{
+  "backend": "cloud",
+  "model": "deepseek-v4-flash:cloud",
+  "endpoint": "https://ollama.com/v1",
+  "goldenset_version": 2,
+  "goldenset_size": 100,
+  "unique_ids": 100,
+  "read_only": true,
+  "slices": [
+    {
+      "file": "cloud-15s-000-020-v4.json",
+      "n": 20,
+      "errors": 0,
+      "rewrite_successes": 18,
+      "consistent": true
+    },
+    {
+      "file": "cloud-15s-020-040-v4.json",
+      "n": 20,
+      "errors": 0,
+      "rewrite_successes": 20,
+      "consistent": true
+    },
+    {
+      "file": "cloud-15s-040-060-v4.json",
+      "n": 20,
+      "errors": 0,
+      "rewrite_successes": 20,
+      "consistent": true
+    },
+    {
+      "file": "cloud-15s-060-080-v4.json",
+      "n": 20,
+      "errors": 0,
+      "rewrite_successes": 17,
+      "consistent": true
+    },
+    {
+      "file": "cloud-15s-080-100-v4.json",
+      "n": 20,
+      "errors": 0,
+      "rewrite_successes": 19,
+      "consistent": true
+    }
+  ],
+  "coverage": {
+    "rows": 100,
+    "unique_result_ids": 100,
+    "duplicates": [],
+    "missing": [],
+    "row_errors": [],
+    "rewrite_nulls": [
+      {
+        "id": "q015",
+        "elapsed_seconds": 15.17,
+        "context_injected": true,
+        "mechanical_retrieve": true
+      },
+      {
+        "id": "q020",
+        "elapsed_seconds": 16.373,
+        "context_injected": true,
+        "mechanical_retrieve": true
+      },
+      {
+        "id": "q075",
+        "elapsed_seconds": 16.406,
+        "context_injected": true,
+        "mechanical_retrieve": true
+      },
+      {
+        "id": "q077",
+        "elapsed_seconds": 15.143,
+        "context_injected": true,
+        "mechanical_retrieve": true
+      },
+      {
+        "id": "q078",
+        "elapsed_seconds": 15.963,
+        "context_injected": true,
+        "mechanical_retrieve": true
+      },
+      {
+        "id": "q091",
+        "elapsed_seconds": 15.586,
+        "context_injected": true,
+        "mechanical_retrieve": true
+      }
+    ]
+  },
+  "metrics": {
+    "n": 100,
+    "errors": 0,
+    "total_serial_seconds": 450.774,
+    "mean_seconds": 4.508,
+    "p50_seconds": 3.481,
+    "p95_seconds": 15.144,
+    "max_seconds": 16.406,
+    "rewrite_successes": 94,
+    "rewrite_success_rate": 0.94,
+    "rewrite_latency_p50": 3.237,
+    "rewrite_latency_p95": 7.096,
+    "joint_route_accuracy": 0.61,
+    "should_retrieve_accuracy": 0.69,
+    "store_candidate_accuracy": 0.91,
+    "context_hit_rate_when_retrieval_expected": 0.792,
+    "false_retrieve_rate_when_retrieval_not_expected": 0.558,
+    "store_capture_rate_when_storage_expected": 0.952,
+    "false_store_rate_when_storage_not_expected": 0.121,
+    "anchor_recall_rewrite_or_raw": 0.905,
+    "variant_bound_accuracy": 0.42
+  }
+}
