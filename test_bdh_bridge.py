@@ -309,6 +309,57 @@ def test_sync_query_omits_vault_when_not_selected(monkeypatch):
     assert "vault_id" not in captured["data"]
 
 
+def test_sync_query_uses_configured_default_vault(monkeypatch):
+    captured = {}
+
+    def fake_request(endpoint, data, **kwargs):
+        captured.update(endpoint=endpoint, data=data)
+        return {"response": "ok"}
+
+    monkeypatch.setenv("BDH_VAULT_ID", "episodic")
+    monkeypatch.setattr(bridge, "_bdh_request", fake_request)
+    bridge._bdh_query_sync("query", source="automatic_retrieval")
+    assert captured["data"]["vault_id"] == "episodic"
+
+
+def test_pre_llm_hook_vault_overrides_configured_default(monkeypatch):
+    calls = []
+
+    def fake_query(query, **kwargs):
+        calls.append(kwargs)
+        return {"activated_notes": [], "response": ""}
+
+    monkeypatch.setenv("BDH_VAULT_ID", "core")
+    monkeypatch.setattr(bridge, "_QUERY_REWRITE_ENABLED", False)
+    monkeypatch.setattr(bridge, "_bdh_query_sync", fake_query)
+    bridge._on_pre_llm_call(
+        session_id="vault-session",
+        vault_id="episodic",
+        user_message="What architecture decision did we make about memory?",
+    )
+    assert calls[0]["vault_id"] == "episodic"
+
+
+def test_post_api_write_reuses_turn_vault(monkeypatch):
+    writes = []
+
+    def fake_async(*args, **kwargs):
+        writes.append(kwargs)
+
+    monkeypatch.setenv("BDH_VAULT_ID", "core")
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    bridge._remember_turn_state(
+        {"session_id": "write-session", "vault_id": "episodic"},
+        "Store this architecture decision for later retrieval.",
+    )
+    bridge._on_post_api_request(
+        session_id="write-session",
+        finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "x" * 300})(),
+    )
+    assert writes[0]["vault_id"] == "episodic"
+
+
 def test_tool_query_passes_explicit_vault(monkeypatch):
     captured = {}
 
