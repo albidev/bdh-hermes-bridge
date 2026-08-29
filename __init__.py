@@ -476,6 +476,28 @@ def _turn_key(kwargs):
     return kwargs.get("session_id") or kwargs.get("task_id")
 
 
+def _resolve_vault_id(explicit=None):
+    """Resolve an explicit vault, then the bridge default, else BDH default."""
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+    configured = os.environ.get("BDH_VAULT_ID", "").strip()
+    return configured or None
+
+
+def _vault_id_from_hook(kwargs):
+    """Read vault scope supplied by Hermes, falling back to bridge config."""
+    for key in ("vault_id", "bdh_vault_id"):
+        value = kwargs.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    metadata = kwargs.get("metadata")
+    if isinstance(metadata, dict):
+        value = metadata.get("vault_id")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return _resolve_vault_id()
+
+
 def _turn_state_key(kwargs):
     """Return a turn-aware state key, falling back to the session identifier."""
     session_key = _turn_key(kwargs)
@@ -514,6 +536,7 @@ def _remember_turn_state(kwargs, user_message):
         _turn_states[key] = {
             "created_at": now,
             "user_message": user_message,
+            "vault_id": _vault_id_from_hook(kwargs),
             "rewritten_query": "",
             "should_retrieve": None,
             "store_candidate": None,
@@ -757,8 +780,7 @@ def _bdh_query_sync(query_text, user_prompt=None, source=None, timeout=30,
         "learn": learn,
         "respond": not (source == "automatic_retrieval" and not learn),
     }
-    # Omit vault_id when not explicitly selected: BDH resolves its configured
-    # default_vault. Routing policy remains outside this low-level helper.
+    vault_id = _resolve_vault_id(vault_id)
     if vault_id:
         payload["vault_id"] = vault_id
     if user_prompt:
@@ -874,7 +896,7 @@ def _format_bdh_context(result):
 
 
 def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
-                     on_success=None, on_complete=None):
+                     on_success=None, on_complete=None, vault_id=None):
     """Fire-and-forget query — used by hooks.
 
     Short timeout (30s) and 1 retry. If BDH is down, the daemon thread
@@ -890,6 +912,9 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
     """
     def _worker():
         payload = {"query": query_text}
+        resolved_vault_id = _resolve_vault_id(vault_id)
+        if resolved_vault_id:
+            payload["vault_id"] = resolved_vault_id
         if user_prompt:
             payload["user_prompt"] = user_prompt
         if source:
@@ -1208,6 +1233,7 @@ def _on_pre_llm_call(**kwargs):
             timeout=2,
             learn=False,
             retries=1,
+            vault_id=_vault_id_from_hook(kwargs),
             query_variants=bdh_query_variants,
         )
         context = _format_bdh_context(result) if _has_relevant_bdh_context(result) else ""
@@ -1310,6 +1336,7 @@ def _on_post_api_request(**kwargs):
         try:
             _bdh_query_async(
                 query, user_prompt=user_prompt, source="assistant_response",
+                vault_id=turn_state.get("vault_id"),
                 on_success=lambda: _remember_session_turn(
                     session_id, user_message, text,
                 ),
