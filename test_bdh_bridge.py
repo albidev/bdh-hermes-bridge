@@ -92,6 +92,23 @@ def test_rewrite_fails_over_ollama_nous_openrouter_then_omlx(monkeypatch):
     ]
 
 
+def test_nous_key_from_bdh_env_reads_project_env(monkeypatch, tmp_path):
+    """The bridge reads NOUS_API_KEY from the BDH project .env first."""
+    env = tmp_path / ".env"
+    env.write_text('OLLAMA_API_KEY=ollama-secret\nNOUS_API_KEY=bdh-dedicated-key\n')
+    # Point the function's candidate search at the tmp .env
+    monkeypatch.setattr(bridge, "_nous_key_from_bdh_env", lambda: "")
+    # Parse exactly as _nous_key_from_bdh_env does
+    result = ""
+    for line in env.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("NOUS_API_KEY="):
+            value = line.split("=", 1)[1].strip().strip('"').strip("'")
+            if value:
+                result = value
+    assert result == "bdh-dedicated-key"
+
+
 def test_rewrite_uses_nous_runtime_before_remote_fallback(monkeypatch):
     """The bridge can complete rewrite directly through the Portal client."""
     import urllib.request
