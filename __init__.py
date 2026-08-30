@@ -159,8 +159,8 @@ _REWRITE_NOUS_URL = (
     .rstrip("/")
 )
 _REWRITE_NOUS_MODEL = (
-    os.environ.get("BDH_REWRITE_NOUS_MODEL", "stepfun/step-3.7-flash:free").strip()
-    or "stepfun/step-3.7-flash:free"
+    os.environ.get("BDH_REWRITE_NOUS_MODEL", "upstage/solar-pro4:free").strip()
+    or "upstage/solar-pro4:free"
 )
 _REWRITE_OPENROUTER_URL = (
     os.environ.get("BDH_REWRITE_OPENROUTER_URL", "https://openrouter.ai/api/v1")
