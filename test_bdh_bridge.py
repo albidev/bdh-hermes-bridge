@@ -22,6 +22,60 @@ def test_default_rewrite_prompt_contains_routing_few_shot_examples():
     assert '"should_retrieve":false,"store_candidate":true' in prompt
 
 
+def test_rewrite_fails_over_ollama_openrouter_then_omlx(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    monkeypatch.setattr(bridge, "_REWRITE_API_URL", "https://ollama.com/v1")
+    monkeypatch.setattr(bridge, "_REWRITE_MODEL", "deepseek-v4-flash:cloud")
+    monkeypatch.setattr(bridge, "_REWRITE_API_KEY", "ollama-key")
+    monkeypatch.delenv("BDH_REWRITE_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
+    monkeypatch.setattr(bridge, "_REWRITE_TIMEOUT", 1)
+
+    calls = []
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            result = {
+                "schema_version": 2,
+                "should_retrieve": True,
+                "store_candidate": False,
+                "query": "Come funziona il routing BDH?",
+                "search_query": "BDH vault routing",
+                "sub_queries": [],
+            }
+            return json.dumps({
+                "choices": [{"message": {"content": json.dumps(result)}}]
+            }).encode()
+
+    def urlopen(req, timeout):
+        calls.append((req.full_url, req.headers.get("Authorization")))
+        if req.full_url.startswith("https://ollama.com/"):
+            raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {}, None)
+        if req.full_url.startswith("https://openrouter.ai/"):
+            raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {}, None)
+        return Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    result = bridge._rewrite_query("Come funziona il routing BDH?")
+
+    assert result["should_retrieve"] is True
+    assert calls == [
+        ("https://ollama.com/v1/chat/completions", "Bearer ollama-key"),
+        ("https://openrouter.ai/api/v1/chat/completions", "Bearer openrouter-key"),
+        ("http://127.0.0.1:8083/v1/chat/completions", None),
+    ]
+
+
 def test_gating_skips_casual_messages():
     assert bridge._should_auto_retrieve("ciao") is False
     assert bridge._should_auto_retrieve("Grazie!") is False
@@ -304,6 +358,7 @@ def test_sync_query_omits_vault_when_not_selected(monkeypatch):
         captured.update(endpoint=endpoint, data=data)
         return {"response": "ok"}
 
+    monkeypatch.delenv("BDH_VAULT_ID", raising=False)
     monkeypatch.setattr(bridge, "_bdh_request", fake_request)
     bridge._bdh_query_sync("query", source="hermes_tool")
     assert "vault_id" not in captured["data"]
@@ -441,12 +496,44 @@ def test_extract_context_truncates_long_messages():
     assert len(context) < 100  # [user] prefix + 50 chars
 
 
-def test_rewrite_query_returns_none_without_api_key(monkeypatch):
+def test_rewrite_query_uses_local_fallback_without_cloud_api_key(monkeypatch):
+    import urllib.request
+
     monkeypatch.setattr(bridge, "_REWRITE_API_KEY", "")
     monkeypatch.delenv("BDH_REWRITE_API_KEY", raising=False)
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            result = {
+                "should_query": True,
+                "query": "test message",
+                "search_query": "test message",
+                "sub_queries": [],
+            }
+            return json.dumps({
+                "choices": [{"message": {"content": json.dumps(result)}}]
+            }).encode()
+
+    calls = []
+
+    def urlopen(req, timeout):
+        calls.append(req.full_url)
+        return FakeResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
     result = bridge._rewrite_query("test message")
-    assert result is None
+
+    assert result["should_retrieve"] is True
+    assert calls == ["http://127.0.0.1:8083/v1/chat/completions"]
 
 
 def test_rewrite_query_resolves_key_after_module_import(monkeypatch):

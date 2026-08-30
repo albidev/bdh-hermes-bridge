@@ -153,6 +153,24 @@ _REWRITE_API_KEY = os.environ.get(
 _REWRITE_HTTP_REFERER = os.environ.get("BDH_REWRITE_HTTP_REFERER", "")
 _REWRITE_APP_TITLE = os.environ.get("BDH_REWRITE_APP_TITLE", "BDH Hermes Bridge")
 _REWRITE_PROMPT_FILE = os.environ.get("BDH_REWRITE_PROMPT_FILE", "")
+_REWRITE_OPENROUTER_URL = (
+    os.environ.get("BDH_REWRITE_OPENROUTER_URL", "https://openrouter.ai/api/v1")
+    .strip()
+    .rstrip("/")
+)
+_REWRITE_OPENROUTER_MODEL = (
+    os.environ.get("BDH_REWRITE_OPENROUTER_MODEL", "z-ai/glm-5.2:free").strip()
+    or "z-ai/glm-5.2:free"
+)
+_REWRITE_LOCAL_URL = (
+    os.environ.get("BDH_REWRITE_LOCAL_URL", "http://127.0.0.1:8083/v1")
+    .strip()
+    .rstrip("/")
+)
+_REWRITE_LOCAL_MODEL = (
+    os.environ.get("BDH_REWRITE_LOCAL_MODEL", "qwen3.8-27b-oq4e-mtp").strip()
+    or "qwen3.8-27b-oq4e-mtp"
+)
 _CONTEXT_MESSAGES_N = _bounded_int(
     os.environ.get("BDH_CONTEXT_MESSAGES_N", "6"), 6, maximum=20
 )
@@ -427,6 +445,40 @@ def _current_rewrite_api_key():
         or os.environ.get("OLLAMA_API_KEY", "").strip()
         or _REWRITE_API_KEY.strip()
     )
+
+
+def _rewrite_provider_candidates():
+    """Return the ordered rewrite providers: Ollama, OpenRouter, then oMLX."""
+    return [
+        {
+            "provider": "ollama-cloud",
+            "url": _REWRITE_API_URL,
+            "model": _REWRITE_MODEL,
+            "api_key": _current_rewrite_api_key(),
+        },
+        {
+            "provider": "openrouter",
+            "url": _REWRITE_OPENROUTER_URL,
+            "model": _REWRITE_OPENROUTER_MODEL,
+            "api_key": os.environ.get("OPENROUTER_API_KEY", "").strip(),
+        },
+        {
+            "provider": "omlx",
+            "url": _REWRITE_LOCAL_URL,
+            "model": _REWRITE_LOCAL_MODEL,
+            "api_key": "",
+        },
+    ]
+
+
+def _is_rewrite_provider_local(provider):
+    """Return whether a rewrite provider is local and needs no API key."""
+    return provider == "omlx"
+
+
+def _is_rewrite_provider_openai_compatible(provider):
+    """Return whether the provider uses the OpenAI-compatible JSON contract."""
+    return provider in {"openrouter", "omlx"}
 
 
 def _is_prompt_blacklisted(message):
@@ -1030,93 +1082,105 @@ def _rewrite_query(user_message, context_text=""):
     output), returns None so the caller falls back to the mechanical gate + raw
     user message.
     """
-    rewrite_api_key = _current_rewrite_api_key()
-    if not rewrite_api_key:
-        logger.warning(
-            "[bdh-bridge] rewrite skipped — BDH_REWRITE_API_KEY/OLLAMA_API_KEY unavailable"
-        )
-        return None
-
     user_content = f"User message:\n{user_message[:1500]}"
     if context_text:
         user_content += f"\n\nRecent context:\n{context_text}"
 
     # Reload prompt each call so external edits take effect without restart.
     system_prompt = _load_rewrite_system_prompt()
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
 
-    payload = {
-        "model": _REWRITE_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
-        "temperature": 0.1,
-        "stream": False,
-        # Force JSON response format if the API supports it
-        "format": "json",
-        # Qwen/oMLX must not emit hidden reasoning around the JSON contract.
-        # Ollama-compatible cloud endpoints safely ignore this provider-specific
-        # template hint when they do not implement it.
-        "chat_template_kwargs": {
-            "enable_thinking": False,
-            "thinking": False,
-        },
-    }
+    for candidate in _rewrite_provider_candidates():
+        provider = candidate["provider"]
+        api_key = candidate["api_key"]
+        if not api_key and not _is_rewrite_provider_local(provider):
+            logger.debug(
+                f"[bdh-bridge] rewrite provider skipped — missing API key: {provider}"
+            )
+            continue
 
-    url = f"{_REWRITE_API_URL}/chat/completions"
-    body = json.dumps(payload).encode()
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {rewrite_api_key}",
-    }
-    if _REWRITE_HTTP_REFERER:
-        headers["HTTP-Referer"] = _REWRITE_HTTP_REFERER
-    if _REWRITE_APP_TITLE:
-        headers["X-Title"] = _REWRITE_APP_TITLE
-
-    try:
-        req = urllib.request.Request(url, data=body, headers=headers)
-        with urllib.request.urlopen(req, timeout=_REWRITE_TIMEOUT) as resp:
-            data = json.loads(resp.read())
-
-        # OpenAI-compatible response format
-        choice = data.get("choices", [{}])[0]
-        content = choice.get("message", {}).get("content", "")
-
-        # Strip markdown code fences if present
-        content = content.strip()
-        if content.startswith("```"):
-            content = re.sub(r"^```(?:json)?\s*", "", content)
-            content = re.sub(r"\s*```$", "", content)
-
-        raw_result = json.loads(content)
-
-        # Normalize optional provider-specific variant fields. If the result is
-        # malformed (missing query, etc.), treat it as a rewrite failure and fall
-        # back to the mechanical gate + raw message.
-        result = _normalize_query_variants(raw_result, user_message, max_variants=_REWRITE_MAX_VARIANTS)
-        if result is None:
-            logger.debug("[bdh-bridge] rewrite output normalization failed — fallback to raw")
-            return None
-
-        logger.info(
-            f"[bdh-bridge] rewrite: should_retrieve={result.get('should_retrieve', result.get('should_query'))}, "
-            f"store_candidate={result.get('store_candidate', result.get('should_query'))}, "
-            f"query={result['query'][:80]!r}, search_query={result['search_query'][:80]!r}, "
-            f"sub_queries={len(result['sub_queries'])}"
-        )
-        return result
-
-    except (URLError, OSError) as e:
-        reason = getattr(e, 'reason', '')
-        if 'timed out' in str(reason).lower() or 'timeout' in str(reason).lower():
-            logger.debug(f"[bdh-bridge] rewrite LLM timeout ({_REWRITE_TIMEOUT}s) — fallback to raw")
+        payload = {
+            "model": candidate["model"],
+            "messages": messages,
+            "temperature": 0.1,
+            "stream": False,
+            # Qwen/oMLX must not emit hidden reasoning around the JSON contract.
+            "chat_template_kwargs": {
+                "enable_thinking": False,
+                "thinking": False,
+            },
+        }
+        if _is_rewrite_provider_openai_compatible(provider):
+            payload["response_format"] = {"type": "json_object"}
         else:
-            logger.debug(f"[bdh-bridge] rewrite LLM error: {e} — fallback to raw")
-        return None
-    except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
-        logger.debug(f"[bdh-bridge] rewrite LLM parse error: {e} — fallback to raw")
-        return None
+            # Ollama-compatible cloud endpoints accept this provider-specific
+            # JSON response hint; OpenAI-compatible local endpoints use the
+            # standard response_format above.
+            payload["format"] = "json"
+
+        url = f"{candidate['url']}/chat/completions"
+        body = json.dumps(payload).encode()
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        if provider == "openrouter":
+            headers["HTTP-Referer"] = _REWRITE_HTTP_REFERER or "https://github.com/bdh-graph-harness"
+            headers["X-Title"] = _REWRITE_APP_TITLE
+        elif _REWRITE_APP_TITLE:
+            headers["X-Title"] = _REWRITE_APP_TITLE
+
+        try:
+            req = urllib.request.Request(url, data=body, headers=headers)
+            with urllib.request.urlopen(req, timeout=_REWRITE_TIMEOUT) as resp:
+                data = json.loads(resp.read())
+
+            # OpenAI-compatible response format
+            choice = data.get("choices", [{}])[0]
+            content = choice.get("message", {}).get("content", "")
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("rewrite provider returned empty content")
+
+            # Strip markdown code fences if present
+            content = content.strip()
+            if content.startswith("```"):
+                content = re.sub(r"^```(?:json)?\s*", "", content)
+                content = re.sub(r"\s*```$", "", content)
+
+            raw_result = json.loads(content)
+
+            # Normalize optional provider-specific variant fields. If the result
+            # is malformed, fail over instead of disabling rewrite immediately.
+            result = _normalize_query_variants(
+                raw_result, user_message, max_variants=_REWRITE_MAX_VARIANTS
+            )
+            if result is None:
+                raise ValueError("rewrite output normalization failed")
+
+            logger.info(
+                f"[bdh-bridge] rewrite provider={provider}: "
+                f"should_retrieve={result.get('should_retrieve', result.get('should_query'))}, "
+                f"store_candidate={result.get('store_candidate', result.get('should_query'))}, "
+                f"query={result['query'][:80]!r}, search_query={result['search_query'][:80]!r}, "
+                f"sub_queries={len(result['sub_queries'])}"
+            )
+            return result
+
+        except (URLError, OSError, ValueError, json.JSONDecodeError,
+                KeyError, IndexError, TypeError, AttributeError) as e:
+            logger.warning(
+                f"[bdh-bridge] rewrite provider failed: {provider} — {e}; trying next"
+            )
+            continue
+
+    logger.warning(
+        "[bdh-bridge] all rewrite providers failed — fallback to mechanical gate + raw"
+    )
+    return None
+
+
 
 
 # ---------------------------------------------------------------------------
