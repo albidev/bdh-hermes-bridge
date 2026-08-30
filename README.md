@@ -79,7 +79,7 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 
 **Context recovery:** Hermes passes `conversation_history` in the `pre_llm_call` hook kwargs. The bridge extracts the last N messages (default 6, configurable), truncates each to 200 chars, and feeds them to the rewrite LLM. No state.db access needed.
 
-**Fallback:** if the rewrite LLM times out, returns invalid JSON, or is unreachable, the bridge falls back to the mechanical gate + raw user message (v0.4.0 behavior). The pipeline is an enhancement, never a blocker. When a valid v2 response is available, retrieval and storage follow their independent flags.
+**Fallback:** the rewrite provider chain is `Ollama Cloud → OpenRouter free → local oMLX`. A provider with no credential is skipped; rate limits, network errors, invalid JSON, and empty responses advance to the next provider. If all three fail, the bridge falls back to the mechanical gate + raw user message (v0.4.0 behavior). The pipeline is an enhancement, never a blocker. When a valid v2 response is available, retrieval and storage follow their independent flags.
 
 **Write path consistency:** the user-language `query` is stored and reused as the embedding seed in `post_api_request`. This ensures the write signal reflects real user intent.
 
@@ -94,10 +94,15 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 | Env var | Default | Purpose |
 |---|---|---|
 | `BDH_QUERY_REWRITE_ENABLED` | `false` | Feature flag (opt-in) |
-| `BDH_REWRITE_MODEL` | `deepseek-v4-flash:cloud` | Ollama Cloud model for classification + rewrite |
-| `BDH_REWRITE_TIMEOUT` | `15` | LLM call timeout in seconds; fallback applies on timeout |
-| `BDH_REWRITE_API_URL` | `https://ollama.com/v1` | OpenAI-compatible endpoint (OpenRouter: `https://openrouter.ai/api/v1`) |
-| `BDH_REWRITE_API_KEY` | (from env) | Dedicated API key for the rewrite LLM |
+| `BDH_REWRITE_MODEL` | `deepseek-v4-flash:cloud` | Ollama Cloud primary model |
+| `BDH_REWRITE_TIMEOUT` | `15` | Per-provider timeout in seconds |
+| `BDH_REWRITE_API_URL` | `https://ollama.com/v1` | Ollama Cloud primary endpoint |
+| `BDH_REWRITE_API_KEY` | (from env) | Dedicated Ollama rewrite key |
+| `BDH_REWRITE_OPENROUTER_MODEL` | `z-ai/glm-5.2:free` | OpenRouter fallback model |
+| `BDH_REWRITE_OPENROUTER_URL` | `https://openrouter.ai/api/v1` | OpenRouter fallback endpoint |
+| `OPENROUTER_API_KEY` | (from env) | OpenRouter fallback credential |
+| `BDH_REWRITE_LOCAL_MODEL` | `qwen3.8-27b-oq4e-mtp` | oMLX fallback model |
+| `BDH_REWRITE_LOCAL_URL` | `http://127.0.0.1:8083/v1` | oMLX fallback endpoint |
 | `BDH_REWRITE_HTTP_REFERER` | empty | Optional OpenRouter attribution header |
 | `BDH_REWRITE_APP_TITLE` | `BDH Hermes Bridge` | Optional OpenRouter application title |
 | `BDH_REWRITE_PROMPT_FILE` | empty | Path to custom Markdown prompt file |
