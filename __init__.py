@@ -456,10 +456,36 @@ def _current_rewrite_api_key():
     )
 
 
+def _nous_key_from_bdh_env() -> str:
+    """Read NOUS_API_KEY from the BDH project .env (BDH-scoped credential).
+
+    The bridge lives inside the Hermes gateway process, which does not load
+    the BDH project's .env. Read it explicitly so BDH-* components use their
+    own dedicated Nous key instead of Hermes' shared OAuth credential.
+    """
+    for candidate in (
+        Path(__file__).resolve().parent.parent / "bdh-graph-harness" / ".env",
+        Path(__file__).resolve().parent / ".env",
+    ):
+        try:
+            if not candidate.is_file():
+                continue
+            for line in candidate.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if line.startswith("NOUS_API_KEY="):
+                    value = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    if value:
+                        return value
+        except OSError:
+            continue
+    return ""
+
+
 def _current_nous_rewrite_credentials():
     """Resolve Nous Portal credentials through Hermes' runtime auth resolver."""
     explicit_key = (
-        os.environ.get("NOUS_API_KEY", "").strip()
+        _nous_key_from_bdh_env()
+        or os.environ.get("NOUS_API_KEY", "").strip()
         or os.environ.get("NOUS_AGENT_KEY", "").strip()
         or os.environ.get("NOUS_ACCESS_TOKEN", "").strip()
     )
