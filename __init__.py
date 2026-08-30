@@ -153,14 +153,23 @@ _REWRITE_API_KEY = os.environ.get(
 _REWRITE_HTTP_REFERER = os.environ.get("BDH_REWRITE_HTTP_REFERER", "")
 _REWRITE_APP_TITLE = os.environ.get("BDH_REWRITE_APP_TITLE", "BDH Hermes Bridge")
 _REWRITE_PROMPT_FILE = os.environ.get("BDH_REWRITE_PROMPT_FILE", "")
+_REWRITE_NOUS_URL = (
+    os.environ.get("BDH_REWRITE_NOUS_URL", "https://inference-api.nousresearch.com/v1")
+    .strip()
+    .rstrip("/")
+)
+_REWRITE_NOUS_MODEL = (
+    os.environ.get("BDH_REWRITE_NOUS_MODEL", "stepfun/step-3.7-flash:free").strip()
+    or "stepfun/step-3.7-flash:free"
+)
 _REWRITE_OPENROUTER_URL = (
     os.environ.get("BDH_REWRITE_OPENROUTER_URL", "https://openrouter.ai/api/v1")
     .strip()
     .rstrip("/")
 )
 _REWRITE_OPENROUTER_MODEL = (
-    os.environ.get("BDH_REWRITE_OPENROUTER_MODEL", "z-ai/glm-5.2:free").strip()
-    or "z-ai/glm-5.2:free"
+    os.environ.get("BDH_REWRITE_OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free").strip()
+    or "nvidia/nemotron-3-ultra-550b-a55b:free"
 )
 _REWRITE_LOCAL_URL = (
     os.environ.get("BDH_REWRITE_LOCAL_URL", "http://127.0.0.1:8083/v1")
@@ -447,14 +456,45 @@ def _current_rewrite_api_key():
     )
 
 
+def _current_nous_rewrite_credentials():
+    """Resolve Nous Portal credentials through Hermes' runtime auth resolver."""
+    explicit_key = (
+        os.environ.get("NOUS_API_KEY", "").strip()
+        or os.environ.get("NOUS_AGENT_KEY", "").strip()
+        or os.environ.get("NOUS_ACCESS_TOKEN", "").strip()
+    )
+    if explicit_key:
+        return explicit_key, _REWRITE_NOUS_URL
+    try:
+        from hermes_cli.auth import resolve_nous_runtime_credentials
+
+        credentials = resolve_nous_runtime_credentials(
+            timeout_seconds=min(float(_REWRITE_TIMEOUT), 15.0),
+            force_refresh=False,
+        )
+        api_key = str(credentials.get("api_key") or "").strip()
+        base_url = str(credentials.get("base_url") or _REWRITE_NOUS_URL).strip().rstrip("/")
+        return api_key, base_url
+    except Exception as exc:
+        logger.debug("[bdh-bridge] Nous rewrite credentials unavailable: %s", exc)
+        return "", _REWRITE_NOUS_URL
+
+
 def _rewrite_provider_candidates():
-    """Return the ordered rewrite providers: Ollama, OpenRouter, then oMLX."""
+    """Return the ordered rewrite providers: Ollama, Nous, OpenRouter, oMLX."""
+    nous_key, nous_url = _current_nous_rewrite_credentials()
     return [
         {
             "provider": "ollama-cloud",
             "url": _REWRITE_API_URL,
             "model": _REWRITE_MODEL,
             "api_key": _current_rewrite_api_key(),
+        },
+        {
+            "provider": "nous",
+            "url": nous_url or _REWRITE_NOUS_URL,
+            "model": _REWRITE_NOUS_MODEL,
+            "api_key": nous_key,
         },
         {
             "provider": "openrouter",
@@ -478,6 +518,11 @@ def _is_rewrite_provider_local(provider):
 
 def _is_rewrite_provider_openai_compatible(provider):
     """Return whether the provider uses the OpenAI-compatible JSON contract."""
+    return provider in {"nous", "openrouter", "omlx"}
+
+
+def _rewrite_provider_supports_response_format(provider):
+    """Return whether the provider advertises OpenAI JSON response mode."""
     return provider in {"openrouter", "omlx"}
 
 
@@ -1113,17 +1158,20 @@ def _rewrite_query(user_message, context_text=""):
                 "thinking": False,
             },
         }
-        if _is_rewrite_provider_openai_compatible(provider):
+        if _rewrite_provider_supports_response_format(provider):
             payload["response_format"] = {"type": "json_object"}
-        else:
+        elif provider == "ollama-cloud":
             # Ollama-compatible cloud endpoints accept this provider-specific
-            # JSON response hint; OpenAI-compatible local endpoints use the
-            # standard response_format above.
+            # JSON response hint. Nous uses the OpenAI wire contract but does
+            # not advertise response_format support in its API docs.
             payload["format"] = "json"
 
         url = f"{candidate['url']}/chat/completions"
         body = json.dumps(payload).encode()
-        headers = {"Content-Type": "application/json"}
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "BDH-Hermes-Bridge/0.8.0",
+        }
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         if provider == "openrouter":

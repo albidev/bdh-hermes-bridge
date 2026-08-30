@@ -13,6 +13,14 @@ _SPEC = importlib.util.spec_from_file_location(
 bridge = importlib.util.module_from_spec(_SPEC)
 assert _SPEC.loader is not None
 _SPEC.loader.exec_module(bridge)
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _disable_real_nous_network(monkeypatch):
+    """Keep legacy bridge tests offline unless they explicitly opt in."""
+    monkeypatch.setattr(bridge, "_current_nous_rewrite_credentials", lambda: ("", ""))
+    monkeypatch.setattr(bridge, "_QUERY_REWRITE_ENABLED", False)
 
 
 def test_default_rewrite_prompt_contains_routing_few_shot_examples():
@@ -22,13 +30,18 @@ def test_default_rewrite_prompt_contains_routing_few_shot_examples():
     assert '"should_retrieve":false,"store_candidate":true' in prompt
 
 
-def test_rewrite_fails_over_ollama_openrouter_then_omlx(monkeypatch):
+def test_rewrite_fails_over_ollama_nous_openrouter_then_omlx(monkeypatch):
     import urllib.error
     import urllib.request
 
     monkeypatch.setattr(bridge, "_REWRITE_API_URL", "https://ollama.com/v1")
     monkeypatch.setattr(bridge, "_REWRITE_MODEL", "deepseek-v4-flash:cloud")
     monkeypatch.setattr(bridge, "_REWRITE_API_KEY", "ollama-key")
+    monkeypatch.setattr(
+        bridge,
+        "_current_nous_rewrite_credentials",
+        lambda: ("nous-key", "https://inference-api.nousresearch.com/v1"),
+    )
     monkeypatch.delenv("BDH_REWRITE_API_KEY", raising=False)
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-key")
@@ -60,6 +73,8 @@ def test_rewrite_fails_over_ollama_openrouter_then_omlx(monkeypatch):
         calls.append((req.full_url, req.headers.get("Authorization")))
         if req.full_url.startswith("https://ollama.com/"):
             raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {}, None)
+        if req.full_url.startswith("https://inference-api.nousresearch.com/"):
+            raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {}, None)
         if req.full_url.startswith("https://openrouter.ai/"):
             raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {}, None)
         return Response()
@@ -71,10 +86,53 @@ def test_rewrite_fails_over_ollama_openrouter_then_omlx(monkeypatch):
     assert result["should_retrieve"] is True
     assert calls == [
         ("https://ollama.com/v1/chat/completions", "Bearer ollama-key"),
+        ("https://inference-api.nousresearch.com/v1/chat/completions", "Bearer nous-key"),
         ("https://openrouter.ai/api/v1/chat/completions", "Bearer openrouter-key"),
         ("http://127.0.0.1:8083/v1/chat/completions", None),
     ]
 
+
+def test_rewrite_uses_nous_runtime_before_remote_fallback(monkeypatch):
+    """The bridge can complete rewrite directly through the Portal client."""
+    import urllib.request
+
+    monkeypatch.setattr(bridge, "_current_nous_rewrite_credentials", lambda: (
+        "nous-key", "https://inference-api.nousresearch.com/v1"
+    ))
+    monkeypatch.setattr(bridge, "_REWRITE_API_KEY", "")
+    monkeypatch.delenv("BDH_REWRITE_API_KEY", raising=False)
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    captured = {}
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self):
+            result = {
+                "schema_version": 2,
+                "should_retrieve": True,
+                "store_candidate": False,
+                "query": "Come funziona il routing BDH?",
+                "search_query": "BDH vault routing",
+                "sub_queries": [],
+            }
+            return json.dumps({"choices": [{"message": {"content": json.dumps(result)}}]}).encode()
+
+    def urlopen(req, timeout):
+        captured["url"] = req.full_url
+        captured["auth"] = req.headers.get("Authorization")
+        captured["user_agent"] = req.headers.get("User-agent")
+        captured["payload"] = json.loads(req.data)
+        return FakeResp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    result = bridge._rewrite_query("Come funziona il routing BDH?")
+    assert result["should_retrieve"] is True
+    assert captured["url"] == "https://inference-api.nousresearch.com/v1/chat/completions"
+    assert captured["auth"] == "Bearer nous-key"
+    assert captured["user_agent"] == "BDH-Hermes-Bridge/0.8.0"
+    assert "response_format" not in captured["payload"]
 
 def test_gating_skips_casual_messages():
     assert bridge._should_auto_retrieve("ciao") is False
@@ -503,6 +561,7 @@ def test_rewrite_query_uses_local_fallback_without_cloud_api_key(monkeypatch):
     monkeypatch.delenv("BDH_REWRITE_API_KEY", raising=False)
     monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setattr(bridge, "_current_nous_rewrite_credentials", lambda: ("", ""))
 
     class FakeResp:
         def __enter__(self):

@@ -79,7 +79,7 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 
 **Context recovery:** Hermes passes `conversation_history` in the `pre_llm_call` hook kwargs. The bridge extracts the last N messages (default 6, configurable), truncates each to 200 chars, and feeds them to the rewrite LLM. No state.db access needed.
 
-**Fallback:** the rewrite provider chain is `Ollama Cloud → OpenRouter free → local oMLX`. A provider with no credential is skipped; rate limits, network errors, invalid JSON, and empty responses advance to the next provider. If all three fail, the bridge falls back to the mechanical gate + raw user message (v0.4.0 behavior). The pipeline is an enhancement, never a blocker. When a valid v2 response is available, retrieval and storage follow their independent flags.
+**Fallback:** the rewrite provider chain is `Ollama Cloud → Nous Portal / stepfun/step-3.7-flash:free → OpenRouter / nvidia/nemotron-3-ultra-550b-a55b:free → local oMLX`. A provider with no credential is skipped; rate limits, network errors, invalid JSON, and empty responses advance to the next provider. Nous credentials are resolved at runtime through Hermes' Portal auth resolver. The bridge omits `response_format` for Nous because the Nous API documentation does not declare that parameter. If all four providers fail, the bridge falls back to the mechanical gate + raw user message. The pipeline is an enhancement, never a blocker. When a valid v2 response is available, retrieval and storage follow their independent flags.
 
 **Write path consistency:** the user-language `query` is stored and reused as the embedding seed in `post_api_request`. This ensures the write signal reflects real user intent.
 
@@ -98,7 +98,9 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 | `BDH_REWRITE_TIMEOUT` | `15` | Per-provider timeout in seconds |
 | `BDH_REWRITE_API_URL` | `https://ollama.com/v1` | Ollama Cloud primary endpoint |
 | `BDH_REWRITE_API_KEY` | (from env) | Dedicated Ollama rewrite key |
-| `BDH_REWRITE_OPENROUTER_MODEL` | `z-ai/glm-5.2:free` | OpenRouter fallback model |
+| `BDH_REWRITE_NOUS_MODEL` | `stepfun/step-3.7-flash:free` | Nous Portal fallback model |
+| `BDH_REWRITE_NOUS_URL` | `https://inference-api.nousresearch.com/v1` | Nous Portal fallback endpoint |
+| `BDH_REWRITE_OPENROUTER_MODEL` | `nvidia/nemotron-3-ultra-550b-a55b:free` | OpenRouter fallback model |
 | `BDH_REWRITE_OPENROUTER_URL` | `https://openrouter.ai/api/v1` | OpenRouter fallback endpoint |
 | `OPENROUTER_API_KEY` | (from env) | OpenRouter fallback credential |
 | `BDH_REWRITE_LOCAL_MODEL` | `qwen3.8-27b-oq4e-mtp` | oMLX fallback model |
