@@ -115,6 +115,13 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 | `BDH_SESSION_SYNTH_MIN_TURNS` | `3` | Minimum written turns before a session is worth synthesising |
 | `BDH_SESSION_SYNTH_MAX_CHARS` | `6000` | Max characters of transcript fed to the synthesis LLM |
 
+Session synthesis retains the resolved `vault_id` captured for every successful
+turn and sends it with the final synthesis request. A session containing turns
+from more than one vault is rejected rather than merged, so knowledge cannot
+cross client boundaries. Sessions without an explicit scope retain the
+single-vault behavior: the synthesis request omits `vault_id` and BDH applies
+its configured default.
+
 ## Reproducible query-rewrite benchmark
 
 The curated 100-case goldenset is stored at `benchmarks/query_rewrite_goldenset.json`. The runner exercises only `pre_llm_call` with BDH `learn=false`; it never writes to the vault. Run it in 20-case slices to preserve progress if a provider times out:
