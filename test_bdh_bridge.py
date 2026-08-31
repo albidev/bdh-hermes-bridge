@@ -148,7 +148,7 @@ def test_rewrite_uses_nous_runtime_before_remote_fallback(monkeypatch):
     assert result["should_retrieve"] is True
     assert captured["url"] == "https://inference-api.nousresearch.com/v1/chat/completions"
     assert captured["auth"] == "Bearer nous-key"
-    assert captured["user_agent"] == "BDH-Hermes-Bridge/0.8.0"
+    assert captured["user_agent"] == "BDH-Hermes-Bridge/0.8.1"
     assert "response_format" not in captured["payload"]
 
 def test_gating_skips_casual_messages():
@@ -1637,6 +1637,239 @@ def test_write_failure_does_not_buffer_session_turn(monkeypatch):
     )
     buf = bridge._session_buffers.get("fail-sess", [])
     assert len(buf) == 0
+
+
+# ---------------------------------------------------------------------------
+# Issue #24 — deterministic client/project vault scope
+# ---------------------------------------------------------------------------
+
+def _set_scope_map(monkeypatch, mapping):
+    monkeypatch.setenv("BDH_VAULT_SCOPE_MAP_JSON", json.dumps(mapping))
+    monkeypatch.delenv("BDH_VAULT_SCOPE_MAP_FILE", raising=False)
+    monkeypatch.delenv("BDH_VAULT_ID", raising=False)
+    bindings = getattr(bridge, "_session_scope_bindings", None)
+    if bindings is not None:
+        bindings.clear()
+
+
+def test_project_scope_resolves_from_explicit_configured_map(monkeypatch):
+    """An explicit project identity maps to its vault without text inference."""
+    _set_scope_map(
+        monkeypatch,
+        {"project:gastrocentrale": "gastrocentrale"},
+    )
+
+    assert bridge._vault_id_from_hook({"project_id": "gastrocentrale"}) == "gastrocentrale"
+
+
+def test_identity_scope_map_routes_two_clients_to_different_vaults(monkeypatch):
+    """Stable platform/sender identities route deterministically per client."""
+    _set_scope_map(
+        monkeypatch,
+        {
+            "platform:discord|sender:client-a": "gastrocentrale",
+            "platform:discord|sender:client-b": "another-client",
+        },
+    )
+
+    assert bridge._vault_id_from_hook(
+        {"platform": "discord", "sender_id": "client-a"}
+    ) == "gastrocentrale"
+    assert bridge._vault_id_from_hook(
+        {"platform": "discord", "sender_id": "client-b"}
+    ) == "another-client"
+
+
+def test_unknown_explicit_project_scope_fails_closed_without_text_inference(monkeypatch):
+    """An unmapped project never falls back to the process-global default."""
+    _set_scope_map(monkeypatch, {})
+    monkeypatch.setenv("BDH_VAULT_ID", "odoo-global")
+    calls = []
+    monkeypatch.setattr(
+        bridge,
+        "_bdh_query_sync",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+
+    result = bridge._on_pre_llm_call(
+        session_id="gastro-session",
+        project_id="gastrocentrale",
+        user_message="What does Storeden do for Gastro Centrale?",
+    )
+
+    assert result is None
+    assert calls == []
+
+
+def test_required_identity_scope_fails_closed_without_mapping(monkeypatch):
+    """A required platform identity never falls back to the default vault."""
+    _set_scope_map(monkeypatch, {})
+    monkeypatch.setenv("BDH_VAULT_ID", "odoo-global")
+    calls = []
+    monkeypatch.setattr(
+        bridge,
+        "_bdh_query_sync",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+
+    bridge._on_pre_llm_call(
+        session_id="required-identity",
+        platform="discord",
+        sender_id="unmapped-client",
+        bdh_scope_required=True,
+        user_message="Explain this client's project architecture in detail.",
+    )
+
+    assert calls == []
+
+
+def test_unresolved_scope_blocks_async_write(monkeypatch):
+    """An unresolved client scope cannot reach the write path either."""
+    _set_scope_map(monkeypatch, {})
+    writes = []
+    monkeypatch.setattr(
+        bridge,
+        "_bdh_query_sync",
+        lambda *args, **kwargs: {"activated_notes": [], "response": ""},
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_bdh_query_async",
+        lambda *args, **kwargs: writes.append(kwargs),
+    )
+
+    bridge._on_pre_llm_call(
+        session_id="blocked-write",
+        project_id="unknown-project",
+        user_message="Store this durable project architecture decision.",
+    )
+    bridge._on_post_api_request(
+        session_id="blocked-write",
+        finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "answer"})(),
+    )
+
+    assert writes == []
+
+
+def test_conflicting_project_and_client_scopes_fail_closed(monkeypatch):
+    """Two explicit identities resolving to different vaults are rejected."""
+    _set_scope_map(
+        monkeypatch,
+        {
+            "project:gastrocentrale": "gastrocentrale",
+            "client:other": "another-client",
+        },
+    )
+    calls = []
+    monkeypatch.setattr(
+        bridge,
+        "_bdh_query_sync",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+
+    assert bridge._on_pre_llm_call(
+        session_id="ambiguous-session",
+        project_id="gastrocentrale",
+        client_id="other",
+        user_message="Explain the project integration architecture in detail.",
+    ) is None
+    assert calls == []
+
+
+def test_session_binding_reuses_resolved_scope_and_rejects_changes(monkeypatch):
+    """A session keeps its first resolved vault and rejects a later conflict."""
+    _set_scope_map(
+        monkeypatch,
+        {
+            "project:gastrocentrale": "gastrocentrale",
+            "project:other": "another-client",
+        },
+    )
+    calls = []
+
+    def fake_query(*args, **kwargs):
+        calls.append(kwargs)
+        return {"activated_notes": [], "response": ""}
+
+    monkeypatch.setattr(bridge, "_bdh_query_sync", fake_query)
+    message = "Explain the project integration architecture in detail."
+    bridge._on_pre_llm_call(
+        session_id="stable-session",
+        project_id="gastrocentrale",
+        user_message=message,
+    )
+    bridge._on_pre_llm_call(session_id="stable-session", user_message=message)
+    assert [call["vault_id"] for call in calls] == ["gastrocentrale", "gastrocentrale"]
+
+    bridge._on_pre_llm_call(
+        session_id="stable-session",
+        project_id="other",
+        user_message=message,
+    )
+    assert len(calls) == 2
+
+
+def test_async_write_reuses_scope_captured_by_pre_hook(monkeypatch):
+    """The write path uses the pre-hook scope even when later kwargs omit it."""
+    _set_scope_map(monkeypatch, {"project:gastrocentrale": "gastrocentrale"})
+    monkeypatch.setattr(
+        bridge,
+        "_bdh_query_sync",
+        lambda *args, **kwargs: {"activated_notes": [], "response": ""},
+    )
+    writes = []
+    monkeypatch.setattr(
+        bridge,
+        "_bdh_query_async",
+        lambda *args, **kwargs: writes.append(kwargs),
+    )
+    message = "Store this durable project architecture decision for later."
+    bridge._on_pre_llm_call(
+        session_id="scoped-write",
+        project_id="gastrocentrale",
+        user_message=message,
+    )
+    bridge._on_post_api_request(
+        session_id="scoped-write",
+        finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "answer"})(),
+    )
+
+    assert writes[0]["vault_id"] == "gastrocentrale"
+
+
+def test_session_synthesis_reuses_resolved_project_scope(monkeypatch):
+    """Session synthesis stays in the vault selected by the hook scope."""
+    _enable_synth(monkeypatch, min_turns=2)
+    _set_scope_map(monkeypatch, {"project:gastrocentrale": "gastrocentrale"})
+    calls = []
+
+    def fake_query(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            _complete_fake_write(kwargs)
+        return {"activated_notes": [], "response": ""}
+
+    monkeypatch.setattr(bridge, "_bdh_query_sync", fake_query)
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_query)
+    message = "Store this durable project architecture decision for later."
+    for answer in ("answer one", "answer two"):
+        bridge._on_pre_llm_call(
+            session_id="scoped-synthesis",
+            project_id="gastrocentrale",
+            user_message=message,
+        )
+        bridge._on_post_api_request(
+            session_id="scoped-synthesis",
+            finish_reason="stop",
+            assistant_message=type("Message", (), {"content": answer})(),
+        )
+
+    bridge._on_session_finalize(session_id="scoped-synthesis")
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+    assert syntheses[0]["vault_id"] == "gastrocentrale"
 
 
 def test_write_recovery_after_failure(monkeypatch):
