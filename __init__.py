@@ -708,11 +708,13 @@ def _pop_turn_state(kwargs):
 # Session-end synthesis helpers (v0.7.0)
 # ---------------------------------------------------------------------------
 
-def _remember_session_turn(session_id, user_message, assistant_text):
-    """Append one written turn to the per-session synthesis buffer.
+def _remember_session_turn(session_id, user_message, assistant_text, vault_id=None):
+    """Append one written turn and its resolved vault to the session buffer.
 
     Only called when the per-turn write path actually succeeded, so the
-    synthesis never introduces content that wasn't already fed to BDH.
+    synthesis never introduces content that wasn't already fed to BDH. The
+    vault scope is retained per turn so a mixed-scope session can be rejected
+    rather than merged into one client's vault.
     """
     if not session_id or not _SESSION_SYNTH_ENABLED:
         return
@@ -729,6 +731,7 @@ def _remember_session_turn(session_id, user_message, assistant_text):
         buf.append({
             "user": (user_message or "")[:1500],
             "assistant": (assistant_text or "")[:1500],
+            "vault_id": vault_id,
         })
 
 
@@ -760,6 +763,18 @@ def _flush_session_synthesis(session_id):
         )
         return
 
+    # A single synthesis request cannot safely contain turns from different
+    # vaults. Treat an absent scope as its own (legacy/default) scope, so a
+    # later client-scoped turn cannot silently join it.
+    scopes = {turn.get("vault_id") for turn in buf}
+    if len(scopes) > 1:
+        logger.warning(
+            f"[bdh-bridge] session {session_id}: mixed vault scopes "
+            f"({scopes!r}) — synthesis rejected"
+        )
+        return
+    synthesis_vault_id = next(iter(scopes), None)
+
     # Compact the transcript, keeping user questions and assistant answers.
     lines = []
     for t in buf:
@@ -787,6 +802,7 @@ def _flush_session_synthesis(session_id):
             query_text=query,
             user_prompt=transcript,
             source="session_synthesis",
+            vault_id=synthesis_vault_id,
         )
         logger.info(f"[bdh-bridge] session {session_id} synthesis queued ({len(buf)} turns)")
     except Exception as e:
@@ -1459,6 +1475,7 @@ def _on_post_api_request(**kwargs):
         # user-language/intent field, so the write path stays provider-neutral.
         query = (turn_state["rewritten_query"] or user_message)[:1500]
         user_prompt = text[:1500]
+        captured_vault_id = turn_state.get("vault_id")
 
         # v0.7.0/#15: remember the turn only after a successful write, and
         # release the pending barrier on both success and failure.
@@ -1476,7 +1493,7 @@ def _on_post_api_request(**kwargs):
                 query, user_prompt=user_prompt, source="assistant_response",
                 vault_id=turn_state.get("vault_id"),
                 on_success=lambda: _remember_session_turn(
-                    session_id, user_message, text,
+                    session_id, user_message, text, captured_vault_id,
                 ),
                 on_complete=(
                     lambda: _session_write_complete(session_id)
