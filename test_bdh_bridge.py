@@ -470,6 +470,17 @@ def test_pre_llm_hook_vault_overrides_configured_default(monkeypatch):
     assert calls[0]["vault_id"] == "episodic"
 
 
+def test_pre_llm_hook_vault_precedence(monkeypatch):
+    """Hook scope precedence is explicit field, alias, metadata, then env."""
+    monkeypatch.setenv("BDH_VAULT_ID", "environment")
+    assert bridge._vault_id_from_hook({"vault_id": "explicit", "bdh_vault_id": "alias"}) == "explicit"
+    assert bridge._vault_id_from_hook({"bdh_vault_id": "alias", "metadata": {"vault_id": "metadata"}}) == "alias"
+    assert bridge._vault_id_from_hook({"metadata": {"vault_id": "metadata"}}) == "metadata"
+    assert bridge._vault_id_from_hook({}) == "environment"
+    monkeypatch.delenv("BDH_VAULT_ID")
+    assert bridge._vault_id_from_hook({}) is None
+
+
 def test_post_api_write_reuses_turn_vault(monkeypatch):
     writes = []
 
@@ -488,6 +499,26 @@ def test_post_api_write_reuses_turn_vault(monkeypatch):
         assistant_message=type("Message", (), {"content": "x" * 300})(),
     )
     assert writes[0]["vault_id"] == "episodic"
+
+
+def test_post_api_write_keeps_captured_vault_after_env_changes(monkeypatch):
+    """A write uses the pre-hook scope, not a later global env value."""
+    writes = []
+    monkeypatch.setenv("BDH_VAULT_ID", "client-a")
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async", lambda *args, **kwargs: writes.append(kwargs)
+    )
+
+    state = {"session_id": "stable-scope", "vault_id": "client-a"}
+    bridge._remember_turn_state(state, "Store this durable architecture decision.")
+    monkeypatch.setenv("BDH_VAULT_ID", "client-b")
+    bridge._on_post_api_request(
+        session_id="stable-scope",
+        finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "answer"})(),
+    )
+
+    assert writes[0]["vault_id"] == "client-a"
 
 
 def test_tool_query_passes_explicit_vault(monkeypatch):
@@ -1227,6 +1258,50 @@ def test_session_buffer_accumulates_written_turns(monkeypatch):
     assert buf[1]["assistant"] == "answer 2"
 
 
+def test_session_synthesis_preserves_buffer_vault_scope(monkeypatch):
+    """A buffered session synthesis targets the scope captured by its turns."""
+    _enable_synth(monkeypatch, min_turns=2)
+    calls = []
+
+    def fake_async(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            _complete_fake_write(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    for question, answer in (("q1", "a1"), ("q2", "a2")):
+        state = {"session_id": "scoped-sess", "vault_id": "client-a"}
+        bridge._remember_turn_state(state, question)
+        bridge._on_post_api_request(
+            session_id="scoped-sess", finish_reason="stop",
+            assistant_message=type("Message", (), {"content": answer})(),
+        )
+
+    buf = bridge._session_buffers["scoped-sess"]
+    assert [turn["vault_id"] for turn in buf] == ["client-a", "client-a"]
+
+    bridge._on_session_finalize(session_id="scoped-sess")
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+    assert syntheses[0]["vault_id"] == "client-a"
+
+
+def test_session_synthesis_rejects_mixed_vault_scopes(monkeypatch):
+    """Mixed-scope session content must never be sent as one synthesis request."""
+    _enable_synth(monkeypatch, min_turns=2)
+    calls = []
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async", lambda *args, **kwargs: calls.append(kwargs)
+    )
+
+    bridge._remember_session_turn("mixed-sess", "client A question", "answer A", "client-a")
+    bridge._remember_session_turn("mixed-sess", "client B question", "answer B", "client-b")
+    bridge._on_session_finalize(session_id="mixed-sess")
+
+    assert [c for c in calls if c.get("source") == "session_synthesis"] == []
+    assert "mixed-sess" not in bridge._session_buffers
+
+
 def test_session_finalize_flushes_synthesis(monkeypatch):
     """on_session_finalize synthesises the targeted session."""
     _enable_synth(monkeypatch, min_turns=2)
@@ -1387,7 +1462,7 @@ def test_session_reset_flushes_old_session(monkeypatch):
     def synth_only():
         return [c for c in synth_calls if c.get("source") == "session_synthesis"]
 
-    state_old = {"session_id": "old"}
+    state_old = {"session_id": "old", "vault_id": "client-a"}
     bridge._remember_turn_state(state_old, "old q1")
     bridge._on_post_api_request(
         session_id="old", finish_reason="stop",
@@ -1404,6 +1479,7 @@ def test_session_reset_flushes_old_session(monkeypatch):
 
     synths = synth_only()
     assert len(synths) == 1
+    assert synths[0]["vault_id"] == "client-a"
     assert "USER: old q1" in synths[0]["user_prompt"]
     assert "ASSISTANT: old a2" in synths[0]["user_prompt"]
     assert "old" not in bridge._session_buffers
@@ -1466,7 +1542,7 @@ def test_session_finalize_waits_for_pending_async_write(monkeypatch):
             pending.append(kwargs)
 
     monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
-    state = {"session_id": "race-sess"}
+    state = {"session_id": "race-sess", "vault_id": "client-a"}
     bridge._remember_turn_state(state, "last question")
     bridge._on_post_api_request(
         session_id="race-sess", finish_reason="stop",
@@ -1486,6 +1562,7 @@ def test_session_finalize_waits_for_pending_async_write(monkeypatch):
 
     syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
     assert len(syntheses) == 1
+    assert syntheses[0]["vault_id"] == "client-a"
     assert "USER: last question" in syntheses[0]["user_prompt"]
     assert "ASSISTANT: last answer" in syntheses[0]["user_prompt"]
     assert "race-sess" not in bridge._session_pending_writes
