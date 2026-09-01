@@ -4,6 +4,11 @@ BDH Bridge — Bidirectional Hermes ↔ BDH Graph Harness integration.
 Write path: feeds session content to BDH after each API response.
 Read path: provides bdh_query and bdh_stats tools.
 
+v0.8.1:
+  - Deterministic client/project vault scope resolution for automatic hooks
+  - Configured identity-to-vault mapping with fail-closed ambiguity handling
+  - Stable per-session scope binding across automatic read, write, and synthesis
+
 v0.8.0:
   - Independent retrieval/storage routing contract (schema_version=2)
   - Strict boolean validation prevents string `"false"` from failing open
@@ -121,6 +126,10 @@ _session_pending_writes = {}  # session_id -> number of in-flight per-turn write
 _session_finalize_requested = set()  # sessions waiting for pending writes to settle
 _bdh_used_sessions = set()
 _bdh_state_lock = threading.Lock()
+# Resolved client/project scopes are bound to a session after the first scoped
+# turn. This prevents a later hook with missing or changed metadata from
+# silently switching vaults mid-session.
+_session_scope_bindings = {}  # session_id -> {vault_id, scope_key}
 _AUTO_RETRIEVAL_MIN_SCORE = 0.30
 # Cron jobs are operational by default. A job must opt in explicitly in its
 # own prompt before the bridge may read from or write to BDH.
@@ -607,18 +616,243 @@ def _resolve_vault_id(explicit=None):
     return configured or None
 
 
-def _vault_id_from_hook(kwargs):
-    """Read vault scope supplied by Hermes, falling back to bridge config."""
-    for key in ("vault_id", "bdh_vault_id"):
-        value = kwargs.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+_SCOPE_ID_FIELDS = (
+    ("bdh_scope_id", "scope"),
+    ("project_id", "project"),
+    ("client_id", "client"),
+    ("workspace_id", "workspace"),
+)
+_SCOPE_REQUIRED_FIELDS = ("bdh_scope_required", "scope_required", "client_scoped")
+
+
+def _scope_text(value):
+    """Return a non-empty structured scope value without coercing arbitrary data."""
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _hook_value(kwargs, key):
+    """Read a structured hook field, allowing metadata as an additive carrier."""
+    value = _scope_text(kwargs.get(key))
+    if value is not None:
+        return value
     metadata = kwargs.get("metadata")
     if isinstance(metadata, dict):
-        value = metadata.get("vault_id")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return _resolve_vault_id()
+        return _scope_text(metadata.get(key))
+    return None
+
+
+def _hook_flag(kwargs, keys):
+    """Read an explicit boolean scope flag; invalid values fail closed upstream."""
+    metadata = kwargs.get("metadata") if isinstance(kwargs.get("metadata"), dict) else {}
+    for key in keys:
+        value = kwargs.get(key, metadata.get(key))
+        if isinstance(value, bool):
+            if value:
+                return True
+        elif isinstance(value, str) and value.strip().casefold() in {"1", "true", "yes", "on"}:
+            return True
+    return False
+
+
+def _load_scope_map():
+    """Load the optional identity-to-vault map from JSON env or JSON file.
+
+    Keys are operator-defined structured identities, for example
+    ``project:gastrocentrale`` or ``platform:discord|sender:client-a``. The
+    map contains no credentials and is deliberately reloaded for each hook so
+    operators can rotate routing without restarting Hermes.
+    """
+    sources = []
+    map_file = os.environ.get("BDH_VAULT_SCOPE_MAP_FILE", "").strip()
+    if map_file:
+        try:
+            sources.append(json.loads(Path(map_file).expanduser().read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError, TypeError):
+            logger.warning("[bdh-bridge] invalid BDH_VAULT_SCOPE_MAP_FILE — scoped routing disabled")
+            return None
+    map_json = os.environ.get("BDH_VAULT_SCOPE_MAP_JSON", "").strip()
+    if map_json:
+        try:
+            sources.append(json.loads(map_json))
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("[bdh-bridge] invalid BDH_VAULT_SCOPE_MAP_JSON — scoped routing disabled")
+            return None
+    if not sources:
+        return {}
+
+    result = {}
+    for source in sources:
+        if not isinstance(source, dict):
+            logger.warning("[bdh-bridge] vault scope map must be a JSON object — scoped routing disabled")
+            return None
+        for raw_key, raw_vault in source.items():
+            key = _scope_text(raw_key)
+            vault_id = _scope_text(raw_vault)
+            if key is None or vault_id is None:
+                logger.warning("[bdh-bridge] empty vault scope map entry ignored")
+                continue
+            normalized_key = key.casefold()
+            previous = result.get(normalized_key)
+            if previous is not None and previous != vault_id:
+                logger.warning("[bdh-bridge] conflicting vault scope map entries — scoped routing disabled")
+                return None
+            result[normalized_key] = vault_id
+    return result
+
+
+def _scope_candidates(kwargs):
+    """Return explicit scope keys and stable hook identity keys."""
+    explicit = []
+    for field, prefix in _SCOPE_ID_FIELDS:
+        value = _hook_value(kwargs, field)
+        if value:
+            candidate = f"{prefix}:{value}"
+            if candidate.casefold() not in {item.casefold() for item in explicit}:
+                explicit.append(candidate)
+
+    identity = []
+    platform = _scope_text(kwargs.get("platform"))
+    sender_id = _scope_text(kwargs.get("sender_id"))
+    chat_id = _scope_text(kwargs.get("chat_id"))
+    thread_id = _scope_text(kwargs.get("thread_id"))
+    if platform and sender_id:
+        identity.append(f"platform:{platform}|sender:{sender_id}")
+    if platform and chat_id:
+        identity.append(f"platform:{platform}|chat:{chat_id}")
+    if platform and chat_id and thread_id:
+        identity.append(f"platform:{platform}|chat:{chat_id}|thread:{thread_id}")
+    return explicit, identity
+
+
+def _scope_map_match(scope_map, candidates, allow_unprefixed=False):
+    """Return matching ``(vault_id, key)`` pairs from a normalized scope map."""
+    matches = []
+    for candidate in candidates:
+        lookup_keys = [candidate]
+        if allow_unprefixed and ":" in candidate:
+            lookup_keys.append(candidate.split(":", 1)[1])
+        for lookup_key in lookup_keys:
+            vault_id = scope_map.get(lookup_key.casefold())
+            if vault_id:
+                matches.append((vault_id, candidate))
+                break
+    return matches
+
+
+def _resolve_hook_scope(kwargs):
+    """Resolve hook scope with explicit, deterministic, fail-closed semantics."""
+    # A directly supplied vault remains the highest-precedence compatibility
+    # contract used by explicit callers and existing single-vault integrations.
+    for key in ("vault_id", "bdh_vault_id"):
+        value = _scope_text(kwargs.get(key))
+        if value:
+            return {"vault_id": value, "scope_key": key, "scoped": True, "error": None}
+    metadata = kwargs.get("metadata")
+    if isinstance(metadata, dict):
+        for key in ("vault_id", "bdh_vault_id"):
+            value = _scope_text(metadata.get(key))
+            if value:
+                return {"vault_id": value, "scope_key": key, "scoped": True, "error": None}
+
+    explicit, identity = _scope_candidates(kwargs)
+    scope_required = _hook_flag(kwargs, _SCOPE_REQUIRED_FIELDS)
+    scope_map = _load_scope_map()
+
+    if explicit:
+        if not scope_map:
+            return {
+                "vault_id": None,
+                "scope_key": None,
+                "scoped": True,
+                "error": "explicit client/project scope is not configured",
+            }
+        matches = _scope_map_match(scope_map, explicit, allow_unprefixed=True)
+        # Every explicit identity must resolve. Partial resolution is unsafe:
+        # it can look successful while silently selecting the wrong client.
+        if len(matches) < len(explicit):
+            return {
+                "vault_id": None,
+                "scope_key": None,
+                "scoped": True,
+                "error": "explicit client/project scope is not configured",
+            }
+        vaults = {vault for vault, _ in matches}
+        if len(vaults) != 1:
+            return {
+                "vault_id": None,
+                "scope_key": None,
+                "scoped": True,
+                "error": "explicit client/project scope is ambiguous",
+            }
+        vault_id = next(iter(vaults))
+        return {"vault_id": vault_id, "scope_key": matches[0][1], "scoped": True, "error": None}
+
+    if scope_map:
+        matches = _scope_map_match(scope_map, identity)
+        vaults = {vault for vault, _ in matches}
+        if len(vaults) > 1:
+            return {
+                "vault_id": None,
+                "scope_key": None,
+                "scoped": True,
+                "error": "client identity maps to multiple vaults",
+            }
+        if len(vaults) == 1:
+            vault_id = next(iter(vaults))
+            return {"vault_id": vault_id, "scope_key": matches[0][1], "scoped": True, "error": None}
+
+    if scope_required:
+        return {
+            "vault_id": None,
+            "scope_key": None,
+            "scoped": True,
+            "error": "required client/project scope is missing or unmapped",
+        }
+    return {"vault_id": _resolve_vault_id(), "scope_key": None, "scoped": False, "error": None}
+
+
+def _bind_session_scope(kwargs, resolution):
+    """Bind a resolved scoped vault and reject later cross-vault switches."""
+    session_id = kwargs.get("session_id")
+    if not session_id or resolution.get("error"):
+        return resolution
+    session_id = str(session_id)
+    with _bdh_state_lock:
+        existing = _session_scope_bindings.get(session_id)
+        if existing:
+            if resolution.get("vault_id") not in (None, existing["vault_id"]):
+                return {
+                    **resolution,
+                    "vault_id": None,
+                    "scoped": True,
+                    "error": "session scope changed to a different vault",
+                }
+            return {
+                **resolution,
+                "vault_id": existing["vault_id"],
+                "scope_key": existing["scope_key"],
+                "scoped": True,
+                "error": None,
+            }
+        if resolution.get("scoped"):
+            _session_scope_bindings[session_id] = {
+                "vault_id": resolution.get("vault_id"),
+                "scope_key": resolution.get("scope_key"),
+            }
+    return resolution
+
+
+def _forget_session_scope(session_id):
+    """Release a session's scope binding at its lifecycle boundary."""
+    if session_id:
+        with _bdh_state_lock:
+            _session_scope_bindings.pop(str(session_id), None)
+
+
+def _vault_id_from_hook(kwargs):
+    """Return the resolved vault ID, or ``None`` when scope resolution fails."""
+    resolution = _resolve_hook_scope(kwargs)
+    return resolution.get("vault_id") if not resolution.get("error") else None
 
 
 def _turn_state_key(kwargs):
@@ -651,22 +885,29 @@ def _remember_turn_state(kwargs, user_message):
     """Store per-turn write state before pre-hook gating can return early."""
     key = _turn_state_key(kwargs)
     if key is None:
-        return
+        return None
     now = time.time()
+    resolution = _bind_session_scope(kwargs, _resolve_hook_scope(kwargs))
     with _bdh_state_lock:
         _cleanup_turn_states_locked(now)
         _turn_states.pop(key, None)
-        _turn_states[key] = {
+        state = {
             "created_at": now,
             "user_message": user_message,
-            "vault_id": _vault_id_from_hook(kwargs),
+            "vault_id": resolution.get("vault_id"),
+            "scope_key": resolution.get("scope_key"),
+            "scope_error": resolution.get("error"),
             "rewritten_query": "",
             "should_retrieve": None,
-            "store_candidate": None,
+            # A scope failure must never reach the write path, even if a
+            # later hook incorrectly reports a durable candidate.
+            "store_candidate": False if resolution.get("error") else None,
             # Legacy alias retained for old callers during the v1→v2 rollout.
             "should_query": None,
         }
+        _turn_states[key] = state
         _cleanup_turn_states_locked(now)
+    return state
 
 
 def _update_turn_state(kwargs, rewritten_query, should_retrieve,
@@ -837,6 +1078,7 @@ def _on_session_finalize(**kwargs):
         session_id = kwargs.get("session_id")
         if session_id:
             _flush_session_synthesis(session_id)
+            _forget_session_scope(session_id)
     except Exception as e:
         logger.debug(f"[bdh-bridge] on_session_finalize error: {e}")
 
@@ -847,6 +1089,7 @@ def _on_session_reset(**kwargs):
         old_session_id = kwargs.get("old_session_id")
         if old_session_id:
             _flush_session_synthesis(old_session_id)
+            _forget_session_scope(old_session_id)
     except Exception as e:
         logger.debug(f"[bdh-bridge] on_session_reset error: {e}")
 
@@ -1212,7 +1455,7 @@ def _rewrite_query(user_message, context_text=""):
         body = json.dumps(payload).encode()
         headers = {
             "Content-Type": "application/json",
-            "User-Agent": "BDH-Hermes-Bridge/0.8.0",
+            "User-Agent": "BDH-Hermes-Bridge/0.8.1",
         }
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -1280,7 +1523,7 @@ def _rewrite_query(user_message, context_text=""):
 def _on_pre_llm_call(**kwargs):
     """Capture the user message and optionally retrieve read-only BDH context.
 
-    v0.8.0: when BDH_QUERY_REWRITE_ENABLED is true, the hook first calls an
+    v0.8.1: when BDH_QUERY_REWRITE_ENABLED is true, the hook first calls an
     LLM to route and rewrite the user message. Retrieval and storage decisions
     are independent. On any LLM failure, it falls back to the mechanical gate
     + raw user message.
@@ -1296,7 +1539,21 @@ def _on_pre_llm_call(**kwargs):
         msg = kwargs.get("user_message", "")
         if not isinstance(msg, str) or not msg.strip():
             return None
-        _remember_turn_state(kwargs, msg)
+        turn_state = _remember_turn_state(kwargs, msg)
+        turn_scope = (
+            {
+                "vault_id": turn_state.get("vault_id"),
+                "scope_error": turn_state.get("scope_error"),
+            }
+            if turn_state is not None
+            else _resolve_hook_scope(kwargs)
+        )
+        if turn_scope.get("error") or turn_scope.get("scope_error"):
+            logger.warning(
+                "[bdh-bridge] automatic retrieval skipped — client/project scope unresolved"
+            )
+            return None
+        captured_vault_id = turn_scope.get("vault_id")
 
         if _is_cron_source(kwargs.get("platform"), kwargs.get("source")) and not _cron_has_bdh_opt_in(msg):
             logger.info("[bdh-bridge] automatic retrieval skipped — cron source is deny-by-default")
@@ -1387,7 +1644,7 @@ def _on_pre_llm_call(**kwargs):
             timeout=2,
             learn=False,
             retries=1,
-            vault_id=_vault_id_from_hook(kwargs),
+            vault_id=captured_vault_id,
             query_variants=bdh_query_variants,
         )
         context = _format_bdh_context(result) if _has_relevant_bdh_context(result) else ""
@@ -1415,6 +1672,11 @@ def _on_post_api_request(**kwargs):
         # Consume state before any return path so missing/aborted responses do
         # not leave cross-turn state behind.
         turn_state = _pop_turn_state(kwargs)
+        if turn_state and turn_state.get("scope_error"):
+            logger.warning(
+                "[bdh-bridge] write skipped — client/project scope unresolved"
+            )
+            return
         finish_reason = kwargs.get("finish_reason", "")
         if finish_reason != "stop":
             return
@@ -1684,7 +1946,7 @@ _BDH_STATS_SCHEMA = {
 # Minimal plugin metadata returned for Hermes introspection.
 PLUGIN = {
     "name": "bdh-bridge",
-    "version": "0.8.0",
+    "version": "0.8.1",
     "description": "Bidirectional Hermes ↔ BDH Graph Harness bridge with independent rewrite routing, normalization, session synthesis, and lifecycle hooks.",
 }
 

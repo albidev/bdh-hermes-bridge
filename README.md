@@ -8,7 +8,7 @@ Bidirectional plugin bridge between [Hermes Agent](https://github.com/NousResear
 
 The plugin connects Hermes' real conversations to BDH's neural knowledge graph and exposes BDH context as native Hermes tools. It learns from actual usage — not fabricated bridge queries.
 
-> **Status:** standalone Hermes plugin, version **0.8.0**.
+> **Status:** standalone Hermes plugin, version **0.8.1**.
 
 ## What it does
 
@@ -114,6 +114,8 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 | `BDH_SESSION_SYNTH_ENABLED` | `false` | Opt-in for cross-session synthesis on Hermes session finalization/reset |
 | `BDH_SESSION_SYNTH_MIN_TURNS` | `3` | Minimum written turns before a session is worth synthesising |
 | `BDH_SESSION_SYNTH_MAX_CHARS` | `6000` | Max characters of transcript fed to the synthesis LLM |
+| `BDH_VAULT_SCOPE_MAP_FILE` | empty | Path to a JSON identity-to-vault map |
+| `BDH_VAULT_SCOPE_MAP_JSON` | empty | Inline JSON identity-to-vault map |
 
 Session synthesis retains the resolved `vault_id` captured for every successful
 turn and sends it with the final synthesis request. A session containing turns
@@ -121,6 +123,46 @@ from more than one vault is rejected rather than merged, so knowledge cannot
 cross client boundaries. Sessions without an explicit scope retain the
 single-vault behavior: the synthesis request omits `vault_id` and BDH applies
 its configured default.
+
+## Deterministic client/project vault scope
+
+Automatic retrieval resolves the BDH vault without inspecting or guessing from
+the natural-language message. Resolution order is:
+
+1. direct `vault_id` or `bdh_vault_id` supplied by the caller;
+2. explicit structured `bdh_scope_id`, `project_id`, `client_id`, or
+   `workspace_id`, resolved through the configured map;
+3. a configured stable hook identity built from `platform` plus `sender_id`,
+   `chat_id`, or `thread_id`;
+4. the legacy `BDH_VAULT_ID` default only when no scoped identity is declared.
+
+Configure the map as an external JSON file (recommended) or inline JSON. Keys
+are explicit operator-defined identities and values are BDH vault IDs:
+
+```json
+{
+  "project:gastrocentrale": "gastrocentrale",
+  "platform:discord|sender:client-a": "gastrocentrale",
+  "platform:telegram|chat:client-b": "another-client"
+}
+```
+
+```bash
+export BDH_VAULT_SCOPE_MAP_FILE=/path/to/bdh-vault-scopes.json
+```
+
+An explicit project/client scope that is absent from the map fails closed; it
+does not fall back to `BDH_VAULT_ID`. Set `bdh_scope_required: true` (or
+`scope_required: true`) in structured hook metadata when a platform identity
+must be mapped and an unmapped identity must be rejected. Once a scoped vault
+is resolved, the bridge binds it to the session. Missing metadata on later
+turns reuses that binding, while a different vault rejects the turn. The same
+captured scope is used by automatic reads, per-turn writes, and session
+synthesis.
+
+This is bridge-side routing and requires no Hermes core modification. The
+`HERMES_SESSION_SCOPE_ID` value is deliberately not used because it can
+represent platform/workspace identity rather than a BDH client/project scope.
 
 ## Reproducible query-rewrite benchmark
 
@@ -386,7 +428,7 @@ Plugins are loaded at process startup. Editing `__init__.py` without restarting 
 
 ```yaml
 name: bdh-hermes-bridge
-version: 0.8.0
+version: 0.8.1
 kind: standalone
 provides_hooks:
   - pre_llm_call
