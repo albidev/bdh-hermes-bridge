@@ -503,6 +503,39 @@ A successful load logs:
 - BDH may be temporarily unavailable during consolidation; this is handled as a soft failure.
 - The plugin catches hook exceptions so a BDH problem does not take down Hermes.
 
+## Semantic vault-router overlay
+
+The bridge can optionally resolve `vault_id` from query content when deterministic routing returns `None`.
+This is an opt-in experimental overlay and never overrides explicit hints or session-bound vaults.
+
+### Files
+
+- `vault_router.py` — overlay module used as a fallback in `_on_pre_llm_call`
+- `scripts/build_vault_router_index.py` — bootstrap script that generates `vault-router-index.local.json` from vault note metadata
+- `docs/semantic-vault-router.md` — detailed behavior, confidence rules, and caveats
+
+### Local index
+
+- Default path: `vault-router-index.local.json`
+- This file is gitignored and should remain local; do not commit it
+- Schema per entry: `{vault_id, title, concepts}`
+- The overlay only activates when deterministic resolution returns `None`
+
+### Bootstrap
+
+```bash
+python3 scripts/build_vault_router_index.py \
+  --vault /path/to/vault1 --vault-id VAULT_A \
+  --vault /path/to/vault2 --vault-id VAULT_B \
+  --output vault-router-index.local.json
+```
+
+### Verification
+
+```bash
+python3 -m pytest test_vault_router.py -q
+```
+
 ## License
 
 MIT

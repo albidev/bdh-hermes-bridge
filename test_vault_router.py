@@ -71,3 +71,15 @@ def test_suggest_vault_returns_none_below_threshold(monkeypatch, tmp_path):
     )
     monkeypatch.chdir(tmp_path)
     assert vault_router.suggest_vault("ciao") is None
+
+
+def test_suggest_vault_returns_none_when_single_vault_below_threshold(monkeypatch, tmp_path):
+    _write_index(
+        tmp_path,
+        [
+            {"vault_id": "core", "title": "Core", "concepts": ["BDH"]},
+            {"vault_id": "core", "title": "Core routing", "concepts": ["BDH"]},
+        ],
+    )
+    monkeypatch.chdir(tmp_path)
+    assert vault_router.suggest_vault("ciao") is None
