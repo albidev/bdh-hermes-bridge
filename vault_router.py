@@ -139,7 +139,11 @@ def suggest_vault(query: str) -> Optional[str]:
 
     ranked_vaults = sorted(best_by_vault.items(), key=lambda item: item[1], reverse=True)
     if len(ranked_vaults) == 1:
-        return ranked_vaults[0][0]
+        best_vault, best_vault_score = ranked_vaults[0]
+        if best_vault_score >= _MIN_CONFIDENCE:
+            return best_vault
+        logger.debug("[vault-router] single vault below threshold: %s %.3f", best_vault, best_vault_score)
+        return None
 
     best_vault, best_vault_score = ranked_vaults[0]
     second_vault, second_vault_score = ranked_vaults[1]
