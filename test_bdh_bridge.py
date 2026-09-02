@@ -532,6 +532,7 @@ def test_tool_query_passes_explicit_vault(monkeypatch):
     result = bridge._tool_bdh_query({"query": "research question", "vault_id": "research"})
     assert '"response": "ok"' in result
     assert captured["kwargs"]["vault_id"] == "research"
+    assert captured["kwargs"]["source"] == "user_query"
 
 
 def test_register_uses_current_plugin_tool_contract():

@@ -1860,7 +1860,7 @@ def _tool_bdh_query(args, **kwargs):
 
         result = _bdh_query_sync(
             query,
-            source="hermes_tool",
+            source="user_query",
             vault_id=args.get("vault_id") or None,
         )
         if result is None:

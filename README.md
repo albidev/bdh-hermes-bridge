@@ -362,7 +362,7 @@ BDH /api/query (read-only, learn=false)
      │
 Hermes LLM ────────────────┐
      │                     │ may call bdh_query
-     │ final response      │ source: hermes_tool
+     │ final response      │ source: user_query
      ▼                     │
 post_api_request           │
      │                     │
@@ -455,7 +455,7 @@ Required field:
 Optional fields:
 
 - `user_prompt` — additional LLM/neurogenesis context
-- `source` — `assistant_response` for dampened learning, `hermes_tool` for normal tool-driven learning
+- `source` — `assistant_response` for dampened learning, `user_query` for normal tool-driven learning
 
 ### `GET /api/stats`
 
