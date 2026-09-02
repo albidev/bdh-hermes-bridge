@@ -26,13 +26,13 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Iterable, List, Optional, Sequence
+from typing import Any, Iterable, List, Optional, Sequence
 
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_INDEX_PATH = "vault-router-index.local.json"
-_MIN_CONFIDENCE = 0.35
+_MIN_CONFIDENCE = 0.4
 _MAX_SUGGESTIONS = 3
 
 
@@ -67,7 +67,7 @@ def _load_index() -> List[_IndexEntry]:
         raise VaultRouterError("vault router index must be a list")
 
     entries: List[_IndexEntry] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for item in data:
         if not isinstance(item, dict):
             continue
@@ -76,9 +76,10 @@ def _load_index() -> List[_IndexEntry]:
         concepts = item.get("concepts", [])
         if not vault_id or not title:
             continue
-        if vault_id in seen:
+        key = (vault_id, title)
+        if key in seen:
             continue
-        seen.add(vault_id)
+        seen.add(key)
         entries.append(_IndexEntry(vault_id=vault_id, title=title, concepts=concepts))
     return entries
 
@@ -127,20 +128,33 @@ def suggest_vault(query: str) -> Optional[str]:
             return best_entry.vault_id
         logger.debug("[vault-router] single match below threshold: %s %.3f", best_entry.vault_id, best_score)
         return None
-    second_score = scored[1][1]
-    margin = best_score - second_score
-    if best_score >= _MIN_CONFIDENCE and margin >= 0.15:
+
+    # Group top matches by vault and pick the strongest vault by best score.
+    best_by_vault: dict[str, float] = {}
+    best_entry_by_vault: dict[str, object] = {}
+    for entry, score in scored:
+        if best_by_vault.get(entry.vault_id, -1.0) < score:
+            best_by_vault[entry.vault_id] = score
+            best_entry_by_vault[entry.vault_id] = entry
+
+    ranked_vaults = sorted(best_by_vault.items(), key=lambda item: item[1], reverse=True)
+    if len(ranked_vaults) == 1:
+        return ranked_vaults[0][0]
+
+    best_vault, best_vault_score = ranked_vaults[0]
+    second_vault, second_vault_score = ranked_vaults[1]
+    if best_vault_score >= _MIN_CONFIDENCE and (best_vault_score - second_vault_score) >= 0.15:
         logger.info(
             "[vault-router] unambiguous suggestion=%s score=%.3f margin=%.3f",
-            best_entry.vault_id,
-            best_score,
-            margin,
+            best_vault,
+            best_vault_score,
+            best_vault_score - second_vault_score,
         )
-        return best_entry.vault_id
+        return best_vault
     logger.debug(
         "[vault-router] ambiguous or low-confidence matches=%s best=%.3f second=%.3f",
-        [entry.vault_id for entry, _ in scored],
-        best_score,
-        second_score,
+        [vault for vault, _ in ranked_vaults],
+        best_vault_score,
+        second_vault_score,
     )
     return None
