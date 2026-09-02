@@ -1150,7 +1150,7 @@ def _bdh_request(endpoint, data=None, timeout=10, retries=1, backoff_base=2.0,
     return None
 
 
-def _bdh_query_sync(query_text, user_prompt=None, source=None, timeout=30,
+def _bdh_query_sync(query_text, user_prompt=None, source=None, timeout=60,
                     learn=True, retries=2, vault_id=None, query_variants=None):
     """Synchronous query to BDH.
 
@@ -1555,6 +1555,26 @@ def _on_pre_llm_call(**kwargs):
             return None
         captured_vault_id = turn_scope.get("vault_id")
 
+        # ── Semantic vault-routing overlay (experiment) ───────────────────
+        # Only activate when deterministic routing returned nothing.
+        # If the overlay cannot confidently suggest a vault, keep the
+        # existing default retrieval behavior unchanged.
+        if captured_vault_id is None:
+            try:
+                from .vault_router import suggest_vault
+            except ImportError:
+                try:
+                    from vault_router import suggest_vault
+                except ImportError as exc:
+                    suggest_vault = None
+                    logger.debug("[bdh-bridge] vault router unavailable: %s", exc)
+            if suggest_vault is not None:
+                overlay_vault = suggest_vault(msg)
+                if overlay_vault is not None:
+                    captured_vault_id = overlay_vault
+                    logger.info("[bdh-bridge] vault router overlay: %s", captured_vault_id)
+        # ──────────────────────────────────────────────────────────────────
+
         if _is_cron_source(kwargs.get("platform"), kwargs.get("source")) and not _cron_has_bdh_opt_in(msg):
             logger.info("[bdh-bridge] automatic retrieval skipped — cron source is deny-by-default")
             return None
@@ -1893,12 +1913,12 @@ def _tool_bdh_stats(args, **kwargs):
             })
 
         output = {
-            "neuron_count": result.get("neuron_count", 0),
-            "active_count": result.get("active_count", 0),
-            "dormant_count": result.get("dormant_count", 0),
-            "synapse_count": result.get("synapse_count", 0),
-            "hebbian_count": result.get("hebbian_count", 0),
-            "average_degree": result.get("average_degree", 0.0),
+            "neuron_count": result.get("neurons", 0),
+            "active_count": result.get("active_neurons", 0),
+            "dormant_count": result.get("dormant_neurons", 0),
+            "synapse_count": result.get("synapses", 0),
+            "hebbian_count": result.get("hebbian_synapses", 0),
+            "average_degree": result.get("avg_degree", 0.0),
         }
         return json.dumps(output, ensure_ascii=False)
     except Exception as e:
