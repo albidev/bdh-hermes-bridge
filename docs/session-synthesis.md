@@ -191,19 +191,22 @@ transcript to BDH's `/api/query` write path with `source=session_synthesis`.
 BDH resolves a source-specific runtime override before generating the response
 and extracting durable concepts.
 
-The current local configuration is:
+The current runtime for `session_synthesis` is deliberately local-only:
 
 ```text
-provider:         Ollama Cloud
-model:            deepseek-v4-flash:cloud
-reasoning_effort: low
-thinking:         enabled
-temperature:      0.1
+provider:             oMLX
+model:                qwen3.8-27b-oq4e-mtp
+endpoint:             http://127.0.0.1:8083/v1/chat/completions
+chat_template_kwargs: {enable_thinking: false, thinking: false}
+fallbacks:            none
 ```
 
-This override applies only to `session_synthesis`; it does not change the
-normal global BDH model, which remains configured independently. The final
-durable-storage decision remains BDH's neurogenesis/durability gate.
+BDH hard-forces this source-specific route even if an older private config still
+contains a Cloud override. The normal global BDH model and fallback chain remain
+unchanged. The synthesis audit is persisted per vault at
+`.bdh-audit/synthesis.jsonl`; it stores metadata and hashes, never the raw
+transcript.
+The final durable-storage decision remains BDH's neurogenesis/durability gate.
 
 ### 3. Optional `pre_llm_call` rewrite/classification: separate model
 
