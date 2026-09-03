@@ -1573,6 +1573,20 @@ def _on_pre_llm_call(**kwargs):
                 if overlay_vault is not None:
                     captured_vault_id = overlay_vault
                     logger.info("[bdh-bridge] vault router overlay: %s", captured_vault_id)
+
+        # Persist the semantic overlay in the turn state as well as using it
+        # for retrieval. Otherwise the later write path (and session synthesis)
+        # would silently fall back to the default vault.
+        state_key = _turn_state_key(kwargs)
+        if (
+            turn_state is not None
+            and state_key is not None
+            and captured_vault_id != turn_state.get("vault_id")
+        ):
+            with _bdh_state_lock:
+                current_state = _turn_states.get(state_key)
+                if current_state is turn_state:
+                    current_state["vault_id"] = captured_vault_id
         # ──────────────────────────────────────────────────────────────────
 
         if _is_cron_source(kwargs.get("platform"), kwargs.get("source")) and not _cron_has_bdh_opt_in(msg):
