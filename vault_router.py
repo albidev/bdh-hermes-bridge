@@ -26,7 +26,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Iterable, List, Optional, Sequence
+from typing import Iterable, List, Optional, Sequence
 
 
 logger = logging.getLogger(__name__)
@@ -131,15 +131,17 @@ def suggest_vault(query: str) -> Optional[str]:
 
     # Group top matches by vault and pick the strongest vault by best score.
     best_by_vault: dict[str, float] = {}
-    best_entry_by_vault: dict[str, object] = {}
     for entry, score in scored:
         if best_by_vault.get(entry.vault_id, -1.0) < score:
             best_by_vault[entry.vault_id] = score
-            best_entry_by_vault[entry.vault_id] = entry
 
     ranked_vaults = sorted(best_by_vault.items(), key=lambda item: item[1], reverse=True)
     if len(ranked_vaults) == 1:
-        return ranked_vaults[0][0]
+        best_vault, best_vault_score = ranked_vaults[0]
+        if best_vault_score >= _MIN_CONFIDENCE:
+            return best_vault
+        logger.debug("[vault-router] single vault below threshold: %s %.3f", best_vault, best_vault_score)
+        return None
 
     best_vault, best_vault_score = ranked_vaults[0]
     second_vault, second_vault_score = ranked_vaults[1]
