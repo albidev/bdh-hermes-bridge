@@ -143,8 +143,10 @@ Recommended rollout:
 4. review generated concepts for durability and scope correctness;
 5. only then consider changing thresholds.
 
-The configuration is not stored in Git and should not be added to a public
-example with private vault mappings.
+The source override is configured in the local BDH runtime config under
+`llm_source_overrides.session_synthesis`; the public `bdh-config.yaml` contains
+only a commented generic example. Private vault mappings and credentials never
+belong in the repository.
 
 ## Which LLM is used?
 
@@ -156,22 +158,26 @@ There are three distinct pieces of logic; they must not be conflated:
 an operator-maintained index of vault titles and concepts. It does not call a
 model.
 
-### 2. Session synthesis: BDH runtime LLM
+### 2. Session synthesis: source-specific BDH runtime LLM
 
 The bridge does not run a separate synthesis model. It sends the bounded
-transcript to BDH's `/api/query` write path. BDH then uses its configured
-runtime generation model.
+transcript to BDH's `/api/query` write path with `source=session_synthesis`.
+BDH resolves a source-specific runtime override before generating the response
+and extracting durable concepts.
 
-In the current local deployment, that model is:
+The current local configuration is:
 
 ```text
-provider: Ollama Cloud
-model:    deepseek-v4-pro
+provider:         Ollama Cloud
+model:            deepseek-v4-flash:cloud
+reasoning_effort: low
+thinking:         enabled
+temperature:      0.1
 ```
 
-This is the model responsible for extracting durable concepts and decisions
-from the session transcript. The final durable-storage decision remains BDH's
-neurogenesis/durability gate.
+This override applies only to `session_synthesis`; it does not change the
+normal global BDH model, which remains configured independently. The final
+durable-storage decision remains BDH's neurogenesis/durability gate.
 
 ### 3. Optional `pre_llm_call` rewrite/classification: separate model
 
@@ -185,9 +191,8 @@ provider: Ollama Cloud
 ```
 
 That model classifies retrieval/storage eligibility and can produce a
-retrieval-only rewrite. It is **not** the session-synthesis model. The rewrite
-fallback chain is documented in the main README and is independent of the BDH
-runtime model.
+retrieval-only rewrite. The rewrite fallback chain is documented in the main
+README and is independent of the source-specific synthesis model.
 
 ## Safety properties and limitations
 
