@@ -113,7 +113,13 @@ The bridge sends a single asynchronous BDH request with:
   "query": "Synthesis of an entire agent session...",
   "user_prompt": "USER: ...\nASSISTANT: ...",
   "source": "session_synthesis",
-  "vault_id": "<resolved vault, when scoped>"
+  "vault_id": "<resolved vault, when scoped>",
+  "metadata": {
+    "synthesis_id": "<uuid4>",
+    "session_id": "<session-id>",
+    "queued_at": 1700000000.0,
+    "transcript_sha256": "<sha256-hex>"
+  }
 }
 ```
 
@@ -124,6 +130,26 @@ synthesis into the user's current answer.
 
 The request is fire-and-forget and bounded. If BDH is unavailable, the hook
 logs the failure and the Hermes conversation continues normally.
+
+## Audit metadata
+
+Each synthesis request carries structured metadata so downstream audit
+consumers can correlate requests and verify transcript integrity without
+storing the raw transcript in audit records.
+
+The metadata dict contains:
+
+| Field | Type | Description |
+|---|---|---|
+| `synthesis_id` | `str` | UUID4 unique to this synthesis flush |
+| `session_id` | `str` | The Hermes session that produced this synthesis |
+| `queued_at` | `float` | Unix timestamp when the request was queued |
+| `transcript_sha256` | `str` | SHA-256 hex digest of the bounded transcript |
+
+The raw transcript never enters the audit record — only its hash, which
+lets downstream consumers verify transcript integrity without re-deriving
+content. The bridge never reads or logs the metadata dict; it is forwarded
+verbatim to BDH.
 
 ## Configuration
 
@@ -226,7 +252,8 @@ The bridge test suite covers:
 - interleaved sessions;
 - mixed-vault rejection;
 - propagation of the semantic router's vault decision through retrieval,
-  per-turn write, and session synthesis.
+  per-turn write, and session synthesis;
+- audit metadata: synthesis_id, session_id, queued_at, transcript_sha256.
 
 Run locally with the feature enabled but the router index unset when testing
 configuration-independent behavior:

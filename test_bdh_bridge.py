@@ -1,5 +1,6 @@
 """Tests for the BDH bridge read/write turn contract."""
 
+import hashlib
 import importlib.util
 import json
 import threading
@@ -1360,6 +1361,148 @@ def test_session_finalize_below_min_turns_skips(monkeypatch):
     assert synth_calls == []
     # Buffer was still drained (no stale synthesis later).
     assert "a" not in bridge._session_buffers
+
+
+# ---------------------------------------------------------------------------
+# v0.9.0: session synthesis audit metadata
+# ---------------------------------------------------------------------------
+
+
+def test_session_synthesis_includes_audit_metadata(monkeypatch):
+    """A queued synthesis carries synthesis_id, session_id, queued_at, and transcript_sha256."""
+    _enable_synth(monkeypatch, min_turns=2)
+    calls = []
+
+    def fake_async(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            _complete_fake_write(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    for question, answer in (("q1", "a1"), ("q2", "a2")):
+        state = {"session_id": "audit-sess", "vault_id": "client-a"}
+        bridge._remember_turn_state(state, question)
+        bridge._on_post_api_request(
+            session_id="audit-sess", finish_reason="stop",
+            assistant_message=type("Message", (), {"content": answer})(),
+        )
+
+    bridge._on_session_finalize(session_id="audit-sess")
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+    meta = syntheses[0].get("metadata")
+    assert isinstance(meta, dict)
+    assert "synthesis_id" in meta
+    assert isinstance(meta["synthesis_id"], str)
+    assert len(meta["synthesis_id"]) == 36  # UUID format
+    assert meta["session_id"] == "audit-sess"
+    assert isinstance(meta["queued_at"], float)
+    assert isinstance(meta["transcript_sha256"], str)
+    assert len(meta["transcript_sha256"]) == 64  # SHA-256 hex digest
+
+
+def test_session_synthesis_transcript_sha256_is_deterministic(monkeypatch):
+    """The same transcript produces the same SHA-256 hash."""
+    _enable_synth(monkeypatch, min_turns=2)
+    calls = []
+
+    def fake_async(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            _complete_fake_write(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    for question, answer in (("q1", "a1"), ("q2", "a2")):
+        state = {"session_id": "sha-sess", "vault_id": "client-a"}
+        bridge._remember_turn_state(state, question)
+        bridge._on_post_api_request(
+            session_id="sha-sess", finish_reason="stop",
+            assistant_message=type("Message", (), {"content": answer})(),
+        )
+
+    bridge._on_session_finalize(session_id="sha-sess")
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+    meta = syntheses[0]["metadata"]
+
+    # Recompute the expected hash from the bounded transcript
+    transcript = "USER: q1\nASSISTANT: a1\nUSER: q2\nASSISTANT: a2"
+    expected_hash = hashlib.sha256(transcript.encode("utf-8")).hexdigest()
+    assert meta["transcript_sha256"] == expected_hash
+
+
+def test_session_synthesis_metadata_does_not_contain_raw_transcript(monkeypatch):
+    """The audit metadata never contains the raw transcript text."""
+    _enable_synth(monkeypatch, min_turns=2)
+    calls = []
+
+    def fake_async(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            _complete_fake_write(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    # Use distinctive content that is unlikely to appear by coincidence in a
+    # 64-character hex digest (which only contains 0-9 and a-f).
+    for question, answer in (
+        ("Explain the vault routing architecture.", "The router uses semantic scoring."),
+        ("How does session synthesis work?", "It flushes a bounded transcript on finalize."),
+    ):
+        state = {"session_id": "privacy-sess", "vault_id": "client-a"}
+        bridge._remember_turn_state(state, question)
+        bridge._on_post_api_request(
+            session_id="privacy-sess", finish_reason="stop",
+            assistant_message=type("Message", (), {"content": answer})(),
+        )
+
+    bridge._on_session_finalize(session_id="privacy-sess")
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+    meta = syntheses[0]["metadata"]
+    # The raw transcript must not appear in any metadata value
+    transcript = "USER: Explain the vault routing architecture.\nASSISTANT: The router uses semantic scoring.\nUSER: How does session synthesis work?\nASSISTANT: It flushes a bounded transcript on finalize."
+    meta_str = json.dumps(meta)
+    assert transcript not in meta_str
+    assert "vault routing architecture" not in meta_str
+    assert "semantic scoring" not in meta_str
+    assert "bounded transcript" not in meta_str
+
+
+def test_session_synthesis_unique_synthesis_id_per_flush(monkeypatch):
+    """Each synthesis flush gets a unique synthesis_id."""
+    _enable_synth(monkeypatch, min_turns=2)
+    calls = []
+
+    def fake_async(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            _complete_fake_write(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+
+    for question, answer in (("q1", "a1"), ("q2", "a2")):
+        state = {"session_id": "unique-sess-1", "vault_id": "client-a"}
+        bridge._remember_turn_state(state, question)
+        bridge._on_post_api_request(
+            session_id="unique-sess-1", finish_reason="stop",
+            assistant_message=type("Message", (), {"content": answer})(),
+        )
+
+    for question, answer in (("q3", "a3"), ("q4", "a4")):
+        state = {"session_id": "unique-sess-2", "vault_id": "client-a"}
+        bridge._remember_turn_state(state, question)
+        bridge._on_post_api_request(
+            session_id="unique-sess-2", finish_reason="stop",
+            assistant_message=type("Message", (), {"content": answer})(),
+        )
+
+    bridge._on_session_finalize(session_id="unique-sess-1")
+    bridge._on_session_finalize(session_id="unique-sess-2")
+
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 2
+    ids = [s["metadata"]["synthesis_id"] for s in syntheses]
+    assert ids[0] != ids[1]
 
 
 # ---------------------------------------------------------------------------
