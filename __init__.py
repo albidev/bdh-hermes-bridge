@@ -4,6 +4,12 @@ BDH Bridge — Bidirectional Hermes ↔ BDH Graph Harness integration.
 Write path: feeds session content to BDH after each API response.
 Read path: provides bdh_query and bdh_stats tools.
 
+v0.9.0:
+  - Session synthesis audit metadata: propagate `metadata` (synthesis_id,
+    session_id, queued_at, transcript_sha256) through `_bdh_query_async`
+    to BDH, so downstream consumers can correlate synthesis requests
+    without storing raw transcript in audit records.
+
 v0.8.1:
   - Deterministic client/project vault scope resolution for automatic hooks
   - Configured identity-to-vault mapping with fail-closed ambiguity handling
@@ -58,6 +64,7 @@ v0.4.0:
   - Removed dead _write_queue/_queue_lock
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -66,6 +73,7 @@ import threading
 import time
 import urllib.request
 import urllib.parse
+import uuid
 from pathlib import Path
 from urllib.error import URLError
 
@@ -1030,6 +1038,17 @@ def _flush_session_synthesis(session_id):
     if len(transcript) > _SESSION_SYNTH_MAX_CHARS:
         transcript = transcript[-_SESSION_SYNTH_MAX_CHARS:]
 
+    # Audit metadata: a unique request id, the originating session, a queue
+    # timestamp, and a SHA-256 of the bounded transcript. The raw transcript
+    # never enters the audit record — only its hash, which lets downstream
+    # consumers correlate requests without re-deriving content.
+    metadata = {
+        "synthesis_id": str(uuid.uuid4()),
+        "session_id": session_id,
+        "queued_at": time.time(),
+        "transcript_sha256": hashlib.sha256(transcript.encode("utf-8")).hexdigest(),
+    }
+
     query = (
         "Synthesis of an entire agent session. Extract and record any durable "
         "concept, decision, architecture choice, lesson learned, or reusable "
@@ -1044,6 +1063,7 @@ def _flush_session_synthesis(session_id):
             user_prompt=transcript,
             source="session_synthesis",
             vault_id=synthesis_vault_id,
+            metadata=metadata,
         )
         logger.info(f"[bdh-bridge] session {session_id} synthesis queued ({len(buf)} turns)")
     except Exception as e:
@@ -1278,7 +1298,8 @@ def _format_bdh_context(result):
 
 
 def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
-                     on_success=None, on_complete=None, vault_id=None):
+                     on_success=None, on_complete=None, vault_id=None,
+                     metadata=None):
     """Fire-and-forget query — used by hooks.
 
     Short timeout (30s) and 1 retry. If BDH is down, the daemon thread
@@ -1291,6 +1312,10 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
         on_complete: Optional zero-arg callback invoked exactly once after
             the worker has a result, including failure. This lets lifecycle
             code release pending-write state without waiting or joining.
+        metadata: Optional dict of audit metadata to propagate through the
+            request. The bridge never reads or logs this dict; it is
+            forwarded verbatim so downstream audit consumers can correlate
+            requests without re-deriving fields.
     """
     def _worker():
         payload = {"query": query_text}
@@ -1301,6 +1326,8 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
             payload["user_prompt"] = user_prompt
         if source:
             payload["source"] = source
+        if metadata:
+            payload["metadata"] = metadata
 
         result = None
         try:
