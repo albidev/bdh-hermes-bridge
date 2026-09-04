@@ -127,6 +127,14 @@ _SESSION_SYNTH_MIN_TURNS = _bounded_int(
 _SESSION_SYNTH_MAX_CHARS = _bounded_int(
     os.environ.get("BDH_SESSION_SYNTH_MAX_CHARS", "6000"), 6000, maximum=100000
 )
+# Synthesising a full session on the local oMLX model is slow (minutes, not
+# seconds): the client must wait long enough for the request to complete. The
+# default 30s tool timeout would abort the HTTP read while the server is still
+# generating, leaving the worker to log a false 'unreachable' even though the
+# write still lands. 300s matches llm_timeout in bdh-config.local.yaml.
+_SESSION_SYNTH_TIMEOUT = _bounded_int(
+    os.environ.get("BDH_SESSION_SYNTH_TIMEOUT", "300"), 300, minimum=60, maximum=600
+)
 _turn_states = {}
 _session_buffers = {}  # session_id -> list of {"user": ..., "assistant": ...}
 _flushed_sessions = set()  # session_ids already flushed — never double-flush
@@ -1331,7 +1339,13 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
 
         result = None
         try:
-            result = _bdh_request("/api/query", payload, timeout=30, retries=2,
+            # Local oMLX synthesis takes minutes; the default 30s tool timeout
+            # would abort the read mid-generation. Long timeout only for the
+            # session-synthesis source (fire-and-forget worker, non-blocking).
+            request_timeout = (
+                _SESSION_SYNTH_TIMEOUT if source == "session_synthesis" else 30
+            )
+            result = _bdh_request("/api/query", payload, timeout=request_timeout, retries=2,
                                   retry_on_timeout=False)
             if result:
                 new = result.get("new_concepts", [])
