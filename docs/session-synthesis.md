@@ -59,12 +59,37 @@ finalize / reset / session boundary
   ├─ discard short, failed, or mixed-scope buffers
   ├─ bound the transcript
   └─ submit one `source=session_synthesis` request to BDH
+
+idle (on_session_idle)
+  ├─ wait logically for in-flight per-turn writes (without blocking the hook)
+  ├─ if the current epoch has fewer than min-turns, leave it open (non-destructive)
+  ├─ otherwise drain the epoch, bound the transcript, and submit one
+  │   `source=session_synthesis` request — WITHOUT resetting the session
+  └─ a later turn starts a new epoch, eligible for its own idle/finalize flush
 ```
 
-The current implementation uses Hermes `on_session_finalize` and
-`on_session_reset` hooks. Session identity rotation remains supported as a
-compatibility boundary, but a new turn is not required for a finalized session
-to flush.
+The current implementation uses Hermes `on_session_finalize`,
+`on_session_reset`, and `on_session_idle` hooks. Session identity rotation
+remains supported as a compatibility boundary, but a new turn is not required
+for a finalized session to flush.
+
+## Idle flush and epochs
+
+An idle flush is **non-destructive**. It stages at most one candidate synthesis
+for the current buffered epoch and leaves the Hermes session alive. The scope
+binding is retained, so the session keeps routing to the same vault when it
+becomes active again.
+
+- **At-most-once per epoch:** once an epoch is drained by an idle flush, a
+  repeated idle notification finds an empty buffer and does nothing.
+- **New epoch on activity:** the first turn buffered after an idle flush starts
+  a fresh epoch, eligible for a later idle or finalize flush.
+- **Below min-turns:** an idle flush with too few turns leaves the buffer
+  intact, so the epoch stays open and can still be synthesized once enough
+  turns accumulate.
+- **Finalize/reset remain authoritative:** they drain whatever remains and
+  permanently close the session, so a late callback can never resurrect it.
+  Finalize after an idle flush does not re-flush the already-drained epoch.
 
 ## What is buffered
 
@@ -279,6 +304,9 @@ The bridge test suite covers:
 - short-session skipping;
 - interleaved sessions;
 - mixed-vault rejection;
+- idle flush: exactly one synthesis per epoch, idempotent repeated idle,
+  new epoch on activity, finalize-after-idle without duplication, pending-write
+  barrier, mixed-scope rejection, and below-min-turns non-destructive retention;
 - propagation of the semantic router's vault decision through retrieval,
   per-turn write, and session synthesis;
 - audit metadata: synthesis_id, session_id, queued_at, transcript_sha256.
