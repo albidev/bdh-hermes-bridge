@@ -2511,9 +2511,15 @@ def test_three_context_only_turns_trigger_synthesis(monkeypatch):
     assert meta.get("context_only_count") == 3
 
 
-def test_context_only_blacklisted_prompt_is_excluded(monkeypatch):
+def test_context_only_blacklisted_prompt_is_excluded(monkeypatch, tmp_path):
     """Blacklisted content never enters the session context buffer."""
     _enable_synth(monkeypatch, min_turns=1)
+    blacklist = tmp_path / "blacklist.txt"
+    blacklist.write_text(
+        "# comment\nReview the conversation above and update the skill library.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bridge, "_PROMPT_BLACKLIST_FILE", blacklist)
     calls = []
     monkeypatch.setattr(bridge, "_bdh_query_async", lambda *a, **kw: calls.append(kw))
 
@@ -2632,14 +2638,51 @@ def test_context_only_pending_write_finalize_race_is_safe(monkeypatch):
 
     bridge._on_session_finalize(session_id="race-ctx")
     assert [c for c in calls if c.get("source") == "session_synthesis"] == []
+    assert bridge._session_pending_writes.get("race-ctx") == 1
+    assert "race-ctx" in bridge._session_finalize_requested
 
     # Complete the accepted write; only then finalize flushes both turns.
     _complete_fake_write(pending[0])
     syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
     assert len(syntheses) == 1
     transcript = syntheses[0]["user_prompt"]
-    assert "USER: q1" in transcript
-    assert "USER: q2" in transcript
+    assert transcript.count("USER: q1") == 1
+    assert transcript.count("USER: q2") == 1
+    assert "race-ctx" not in bridge._session_pending_writes
+    assert "race-ctx" not in bridge._session_finalize_requested
+
+
+# Regressione t_e41d431b: una turn context-only non deve toccare la barriera pending-write.
+def test_context_only_turn_does_not_release_pending_write_barrier(monkeypatch):
+    """Issue t_e41d431b: context_only must never decrement _session_pending_writes."""
+    _enable_synth(monkeypatch, min_turns=1)
+    calls = []
+    pending = []
+
+    def fake_async(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            pending.append(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+
+    _post_accepted_turn("barrier-ctx", "q1", "a1", "client-a")
+    assert bridge._session_pending_writes.get("barrier-ctx") == 1
+
+    _post_context_only_turn("barrier-ctx", "q2", "a2", "client-a")
+    # Pending barrier unchanged by context-only turn.
+    assert bridge._session_pending_writes.get("barrier-ctx") == 1
+    assert len(pending) == 1
+
+    bridge._on_session_finalize(session_id="barrier-ctx")
+    assert [c for c in calls if c.get("source") == "session_synthesis"] == []
+
+    _complete_fake_write(pending[0])
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+    transcript = syntheses[0]["user_prompt"]
+    assert transcript.count("USER: q1") == 1
+    assert transcript.count("USER: q2") == 1
 
 
 def test_context_only_turns_preserve_existing_session_synthesis_tests(monkeypatch):

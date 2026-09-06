@@ -1827,6 +1827,8 @@ def _on_post_api_request(**kwargs):
             # v0.10.0: turns that are not durable enough for a direct write can
             # still carry causal context needed by later turns in the same
             # session. Buffer them as context_only for session synthesis.
+            # They must NOT touch the pending-write barrier, which only tracks
+            # in-flight assistant_response writes.
             _remember_session_turn(
                 session_id, user_message, text, captured_vault_id,
                 context_only=True,
