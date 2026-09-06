@@ -1,5 +1,5 @@
 name: bdh-hermes-bridge
-version: 0.10.0
+version: 0.11.0
 description: "Bidirectional bridge between Hermes Agent and BDH Graph Harness — independent rewrite routing for retrieval/storage, conditionally retrieves read-only context, auto-feeds completed sessions (including context-only turns), adds cross-session synthesis, and provides BDH tools."
 author: albi
 kind: standalone
@@ -10,6 +10,7 @@ provides_hooks:
   - transform_llm_output
   - on_session_finalize
   - on_session_reset
+  - on_session_idle
 provides_tools:
   - bdh_query
   - bdh_stats

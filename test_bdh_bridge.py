@@ -1221,6 +1221,7 @@ def _enable_synth(monkeypatch, min_turns=3):
     bridge._flushed_sessions.clear()
     bridge._session_pending_writes.clear()
     bridge._session_finalize_requested.clear()
+    bridge._session_idle_requested.clear()
 
 
 def _complete_fake_write(kwargs, *, success=True):
@@ -1738,6 +1739,241 @@ def test_register_wires_session_lifecycle_hooks():
     bridge.register(FakeApp())
     assert "on_session_finalize" in hooks
     assert "on_session_reset" in hooks
+    assert "on_session_idle" in hooks
+
+
+# ---------------------------------------------------------------------------
+# v0.11.0: epoch-aware idle flush (on_session_idle)
+# ---------------------------------------------------------------------------
+
+
+def test_session_idle_flushes_synthesis(monkeypatch):
+    """An idle flush with enough turns queues exactly one session synthesis."""
+    _enable_synth(monkeypatch, min_turns=2)
+    synth_calls = []
+
+    def fake_async(*args, **kwargs):
+        synth_calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            _complete_fake_write(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    for q, a in (("q1", "a1"), ("q2", "a2")):
+        state = {"session_id": "idle-sess", "vault_id": "client-a"}
+        bridge._remember_turn_state(state, q)
+        bridge._on_post_api_request(
+            session_id="idle-sess", finish_reason="stop",
+            assistant_message=type("Message", (), {"content": a})(),
+        )
+
+    bridge._on_session_idle(session_id="idle-sess")
+    syntheses = [c for c in synth_calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+    assert syntheses[0]["vault_id"] == "client-a"
+    # Non-destructive: buffer drained, but the session is NOT finalized.
+    assert "idle-sess" not in bridge._session_buffers
+    assert "idle-sess" not in bridge._flushed_sessions
+
+
+def test_session_idle_repeated_is_idempotent(monkeypatch):
+    """Repeated idle notifications for the same epoch stage at most one synthesis."""
+    _enable_synth(monkeypatch, min_turns=2)
+    synth_calls = []
+
+    def fake_async(*args, **kwargs):
+        synth_calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            _complete_fake_write(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    for q, a in (("q1", "a1"), ("q2", "a2")):
+        state = {"session_id": "idle-sess", "vault_id": "client-a"}
+        bridge._remember_turn_state(state, q)
+        bridge._on_post_api_request(
+            session_id="idle-sess", finish_reason="stop",
+            assistant_message=type("Message", (), {"content": a})(),
+        )
+
+    bridge._on_session_idle(session_id="idle-sess")
+    bridge._on_session_idle(session_id="idle-sess")
+    bridge._on_session_idle(session_id="idle-sess")
+    syntheses = [c for c in synth_calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+
+
+def test_session_idle_then_activity_starts_new_epoch(monkeypatch):
+    """Activity after an idle flush starts a new epoch, eligible for a later flush."""
+    _enable_synth(monkeypatch, min_turns=2)
+    synth_calls = []
+
+    def fake_async(*args, **kwargs):
+        synth_calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            _complete_fake_write(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    # Epoch 0: two turns, then idle flush.
+    for q, a in (("q1", "a1"), ("q2", "a2")):
+        state = {"session_id": "idle-sess", "vault_id": "client-a"}
+        bridge._remember_turn_state(state, q)
+        bridge._on_post_api_request(
+            session_id="idle-sess", finish_reason="stop",
+            assistant_message=type("Message", (), {"content": a})(),
+        )
+    bridge._on_session_idle(session_id="idle-sess")
+
+    # Epoch 1: two more turns, then idle flush.
+    for q, a in (("q3", "a3"), ("q4", "a4")):
+        state = {"session_id": "idle-sess", "vault_id": "client-a"}
+        bridge._remember_turn_state(state, q)
+        bridge._on_post_api_request(
+            session_id="idle-sess", finish_reason="stop",
+            assistant_message=type("Message", (), {"content": a})(),
+        )
+    bridge._on_session_idle(session_id="idle-sess")
+
+    syntheses = [c for c in synth_calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 2
+    assert "USER: q1" in syntheses[0]["user_prompt"]
+    assert "USER: q3" in syntheses[1]["user_prompt"]
+    assert "USER: q1" not in syntheses[1]["user_prompt"]
+
+
+def test_finalize_after_idle_does_not_duplicate(monkeypatch):
+    """Finalize after an idle flush (no new activity) does not re-flush the epoch."""
+    _enable_synth(monkeypatch, min_turns=2)
+    synth_calls = []
+
+    def fake_async(*args, **kwargs):
+        synth_calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            _complete_fake_write(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    for q, a in (("q1", "a1"), ("q2", "a2")):
+        state = {"session_id": "idle-sess", "vault_id": "client-a"}
+        bridge._remember_turn_state(state, q)
+        bridge._on_post_api_request(
+            session_id="idle-sess", finish_reason="stop",
+            assistant_message=type("Message", (), {"content": a})(),
+        )
+
+    bridge._on_session_idle(session_id="idle-sess")
+    bridge._on_session_finalize(session_id="idle-sess")
+    syntheses = [c for c in synth_calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+
+
+def test_finalize_after_idle_flushes_only_new_epoch(monkeypatch):
+    """Finalize after idle + new activity flushes only the new epoch, not the old one."""
+    _enable_synth(monkeypatch, min_turns=2)
+    synth_calls = []
+
+    def fake_async(*args, **kwargs):
+        synth_calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            _complete_fake_write(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    # Epoch 0: two turns, idle flush.
+    for q, a in (("q1", "a1"), ("q2", "a2")):
+        state = {"session_id": "idle-sess", "vault_id": "client-a"}
+        bridge._remember_turn_state(state, q)
+        bridge._on_post_api_request(
+            session_id="idle-sess", finish_reason="stop",
+            assistant_message=type("Message", (), {"content": a})(),
+        )
+    bridge._on_session_idle(session_id="idle-sess")
+
+    # Epoch 1: two turns, then finalize.
+    for q, a in (("q3", "a3"), ("q4", "a4")):
+        state = {"session_id": "idle-sess", "vault_id": "client-a"}
+        bridge._remember_turn_state(state, q)
+        bridge._on_post_api_request(
+            session_id="idle-sess", finish_reason="stop",
+            assistant_message=type("Message", (), {"content": a})(),
+        )
+    bridge._on_session_finalize(session_id="idle-sess")
+
+    syntheses = [c for c in synth_calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 2
+    assert "USER: q3" in syntheses[1]["user_prompt"]
+    assert "USER: q1" not in syntheses[1]["user_prompt"]
+
+
+def test_session_idle_waits_for_pending_async_write(monkeypatch):
+    """An idle flush must not bypass the pending-write barrier."""
+    _enable_synth(monkeypatch, min_turns=1)
+    calls = []
+    pending = []
+
+    def fake_async(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            pending.append(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    state = {"session_id": "idle-race", "vault_id": "client-a"}
+    bridge._remember_turn_state(state, "last question")
+    bridge._on_post_api_request(
+        session_id="idle-race", finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "last answer"})(),
+    )
+    assert len(pending) == 1
+
+    bridge._on_session_idle(session_id="idle-race")
+    assert [c for c in calls if c.get("source") == "session_synthesis"] == []
+    assert bridge._session_pending_writes["idle-race"] == 1
+
+    pending[0]["on_success"]()
+    assert [c for c in calls if c.get("source") == "session_synthesis"] == []
+    pending[0]["on_complete"]()
+
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+    assert "idle-race" not in bridge._session_pending_writes
+
+
+def test_session_idle_rejects_mixed_vault_scopes(monkeypatch):
+    """Mixed-scope session content is rejected on idle flush, not merged."""
+    _enable_synth(monkeypatch, min_turns=2)
+    calls = []
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async", lambda *a, **kw: calls.append(kw)
+    )
+
+    bridge._remember_session_turn("idle-mixed", "client A question", "answer A", "client-a")
+    bridge._remember_session_turn("idle-mixed", "client B question", "answer B", "client-b")
+    bridge._on_session_idle(session_id="idle-mixed")
+
+    assert [c for c in calls if c.get("source") == "session_synthesis"] == []
+    assert "idle-mixed" not in bridge._session_buffers
+
+
+def test_session_idle_below_min_turns_keeps_buffer(monkeypatch):
+    """An idle flush below min turns is non-destructive: the epoch stays open."""
+    _enable_synth(monkeypatch, min_turns=3)
+    synth_calls = []
+
+    def fake_async(*args, **kwargs):
+        synth_calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            _complete_fake_write(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    for q, a in (("q1", "a1"), ("q2", "a2")):
+        state = {"session_id": "idle-sess", "vault_id": "client-a"}
+        bridge._remember_turn_state(state, q)
+        bridge._on_post_api_request(
+            session_id="idle-sess", finish_reason="stop",
+            assistant_message=type("Message", (), {"content": a})(),
+        )
+
+    bridge._on_session_idle(session_id="idle-sess")
+    assert [c for c in synth_calls if c.get("source") == "session_synthesis"] == []
+    # Non-destructive: the buffer is preserved for a later flush.
+    assert "idle-sess" in bridge._session_buffers
+    assert len(bridge._session_buffers["idle-sess"]) == 2
 
 
 # ---------------------------------------------------------------------------

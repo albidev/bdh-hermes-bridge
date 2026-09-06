@@ -4,6 +4,12 @@ BDH Bridge — Bidirectional Hermes ↔ BDH Graph Harness integration.
 Write path: feeds session content to BDH after each API response.
 Read path: provides bdh_query and bdh_stats tools.
 
+v0.11.0:
+  - Epoch-aware idle flush: an explicit on_session_idle hook stages at most one
+    candidate synthesis for the current buffered epoch without resetting the
+    Hermes session. A later turn starts a new epoch, eligible for its own
+    idle/finalize flush. Finalize/reset remain authoritative fallbacks.
+
 v0.10.0:
   - Session synthesis context-only retention: turns where `store_candidate=false`
     are no longer dropped immediately. Safe, complete context-only turns are
@@ -147,6 +153,7 @@ _session_buffers = {}  # session_id -> list of {"user": ..., "assistant": ...}
 _flushed_sessions = set()  # session_ids already flushed — never double-flush
 _session_pending_writes = {}  # session_id -> number of in-flight per-turn writes
 _session_finalize_requested = set()  # sessions waiting for pending writes to settle
+_session_idle_requested = set()  # sessions waiting for pending writes before an idle flush
 _bdh_used_sessions = set()
 _bdh_state_lock = threading.Lock()
 # Resolved client/project scopes are bound to a session after the first scoped
@@ -1003,8 +1010,14 @@ def _remember_session_turn(session_id, user_message, assistant_text,
         })
 
 
-def _flush_session_synthesis(session_id):
+def _flush_session_synthesis(session_id, final=True):
     """Fire-and-forget a curated session synthesis to BDH, if worth it.
+
+    ``final=True`` (finalize/reset) is the authoritative teardown: the buffer
+    is always drained and the session is marked flushed so a late callback can
+    never resurrect it. ``final=False`` (idle) is non-destructive: it stages at
+    most one synthesis for the current buffered epoch and leaves the session
+    alive, so a later turn starts a new epoch eligible for its own flush.
 
     If per-turn writes are still in flight, mark the lifecycle boundary and
     let their completion callback retry the flush. The hook itself remains
@@ -1017,18 +1030,31 @@ def _flush_session_synthesis(session_id):
         if session_id in _flushed_sessions:
             return
         if _session_pending_writes.get(session_id, 0):
-            _session_finalize_requested.add(session_id)
+            if final:
+                _session_finalize_requested.add(session_id)
+            else:
+                _session_idle_requested.add(session_id)
             return
-        _flushed_sessions.add(session_id)
-        _session_finalize_requested.discard(session_id)
+        buf = _session_buffers.get(session_id, [])
+        if len(buf) < _SESSION_SYNTH_MIN_TURNS:
+            if final:
+                # Authoritative teardown: drain so a short session can never be
+                # synthesized later.
+                _session_buffers.pop(session_id, None)
+                _flushed_sessions.add(session_id)
+                _session_finalize_requested.discard(session_id)
+                _session_idle_requested.discard(session_id)
+            # Idle: leave the buffer intact; the epoch stays open for a later
+            # flush once enough turns have accumulated.
+            return
+        # Worth synthesizing: drain the current epoch and mark it flushed.
+        if final:
+            _flushed_sessions.add(session_id)
+            _session_finalize_requested.discard(session_id)
+        else:
+            _session_idle_requested.discard(session_id)
         buf = _session_buffers.pop(session_id, None)
     if not buf:
-        return
-    if len(buf) < _SESSION_SYNTH_MIN_TURNS:
-        logger.debug(
-            f"[bdh-bridge] session {session_id}: only {len(buf)} turn(s), "
-            f"below min {_SESSION_SYNTH_MIN_TURNS} — skipping synthesis"
-        )
         return
 
     # A single synthesis request cannot safely contain turns from different
@@ -1098,20 +1124,24 @@ def _flush_session_synthesis(session_id):
 
 
 def _session_write_complete(session_id):
-    """Release one pending write and flush if lifecycle already finalized it."""
+    """Release one pending write and flush if a lifecycle boundary is waiting."""
     if not session_id:
         return
     session_id = str(session_id)
-    should_flush = False
+    should_flush_final = False
+    should_flush_idle = False
     with _bdh_state_lock:
         pending = _session_pending_writes.get(session_id, 0)
         if pending <= 1:
             _session_pending_writes.pop(session_id, None)
-            should_flush = session_id in _session_finalize_requested
+            should_flush_final = session_id in _session_finalize_requested
+            should_flush_idle = session_id in _session_idle_requested
         else:
             _session_pending_writes[session_id] = pending - 1
-    if should_flush:
-        _flush_session_synthesis(session_id)
+    if should_flush_final:
+        _flush_session_synthesis(session_id, final=True)
+    elif should_flush_idle:
+        _flush_session_synthesis(session_id, final=False)
 
 
 def _on_session_finalize(**kwargs):
@@ -1139,6 +1169,23 @@ def _on_session_reset(**kwargs):
             _forget_session_scope(old_session_id)
     except Exception as e:
         logger.debug(f"[bdh-bridge] on_session_reset error: {e}")
+
+
+def _on_session_idle(**kwargs):
+    """Flush the current epoch's synthesis when Hermes reports the session idle.
+
+    Unlike finalize/reset, an idle flush is non-destructive: it stages at most
+    one candidate synthesis for the current buffered epoch and leaves the
+    session alive. A later turn starts a new epoch, eligible for its own
+    idle/finalize flush. The scope binding is retained so the session keeps
+    routing to the same vault when it becomes active again.
+    """
+    try:
+        session_id = kwargs.get("session_id")
+        if session_id:
+            _flush_session_synthesis(session_id, final=False)
+    except Exception as e:
+        logger.debug(f"[bdh-bridge] on_session_idle error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -2050,7 +2097,7 @@ _BDH_STATS_SCHEMA = {
 # Minimal plugin metadata returned for Hermes introspection.
 PLUGIN = {
     "name": "bdh-bridge",
-    "version": "0.10.0",
+    "version": "0.11.0",
     "description": "Bidirectional Hermes ↔ BDH Graph Harness bridge with independent rewrite routing, normalization, session synthesis, and lifecycle hooks.",
 }
 
@@ -2068,6 +2115,8 @@ def register(app):
     # v0.7.1: session lifecycle hooks for synthesis flush (issue #14)
     app.register_hook("on_session_finalize", _on_session_finalize)
     app.register_hook("on_session_reset", _on_session_reset)
+    # v0.11.0: non-destructive idle flush (epoch-aware synthesis)
+    app.register_hook("on_session_idle", _on_session_idle)
 
     app.register_tool(
         name="bdh_query",
