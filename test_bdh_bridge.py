@@ -2349,3 +2349,318 @@ def test_rewrite_request_disables_qwen_thinking_for_structured_output(monkeypatc
         "thinking": False,
     }
 
+
+# ---------------------------------------------------------------------------
+# v0.10.0: session synthesis retains context-only turns
+# ---------------------------------------------------------------------------
+
+def _post_context_only_turn(session_id, question, answer, vault_id=None):
+    """Simulate a safe store_candidate=false turn through the post hook."""
+    state_kwargs = {"session_id": session_id}
+    if vault_id is not None:
+        state_kwargs["vault_id"] = vault_id
+    bridge._remember_turn_state(state_kwargs, question)
+    bridge._update_turn_state(
+        state_kwargs,
+        rewritten_query=question,
+        should_retrieve=False,
+        store_candidate=False,
+    )
+    bridge._on_post_api_request(
+        session_id=session_id,
+        finish_reason="stop",
+        assistant_message=type("Message", (), {"content": answer})(),
+    )
+
+
+def _post_accepted_turn(session_id, question, answer, vault_id=None, *,
+                       async_fn=None, store_candidate=True):
+    """Simulate a store_candidate=true turn with optional async double."""
+    state_kwargs = {"session_id": session_id}
+    if vault_id is not None:
+        state_kwargs["vault_id"] = vault_id
+    bridge._remember_turn_state(state_kwargs, question)
+    bridge._update_turn_state(
+        state_kwargs,
+        rewritten_query=question,
+        should_retrieve=False,
+        store_candidate=store_candidate,
+    )
+    bridge._on_post_api_request(
+        session_id=session_id,
+        finish_reason="stop",
+        assistant_message=type("Message", (), {"content": answer})(),
+    )
+
+
+def test_context_only_turn_skips_direct_write_but_appears_in_synthesis(monkeypatch):
+    """store_candidate=false writes no assistant_response but is buffered for synthesis."""
+    _enable_synth(monkeypatch, min_turns=1)
+    calls = []
+
+    def fake_async(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            _complete_fake_write(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+
+    _post_context_only_turn("ctx-sess", "question one", "answer one", "client-a")
+
+    # No direct write was attempted.
+    assistant_writes = [c for c in calls if c.get("source") == "assistant_response"]
+    assert assistant_writes == []
+
+    # The turn is in the buffer marked as context_only.
+    buf = bridge._session_buffers["ctx-sess"]
+    assert len(buf) == 1
+    assert buf[0]["user"] == "question one"
+    assert buf[0]["assistant"] == "answer one"
+    assert buf[0].get("context_only") is True
+    assert buf[0]["vault_id"] == "client-a"
+
+    bridge._on_session_finalize(session_id="ctx-sess")
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+    assert "USER: question one" in syntheses[0]["user_prompt"]
+    assert "ASSISTANT: answer one" in syntheses[0]["user_prompt"]
+
+
+def test_mixed_context_only_and_accepted_turns_synthesize_once_each(monkeypatch):
+    """A mixed false/false/true session includes all safe turns exactly once."""
+    _enable_synth(monkeypatch, min_turns=3)
+    calls = []
+
+    def fake_async(*args, **kwargs):
+        # Preserve positional args so we can assert on the direct write query.
+        kwargs["_args"] = args
+        calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            _complete_fake_write(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+
+    _post_context_only_turn("mixed-sess", "q1", "a1", "client-a")
+    _post_context_only_turn("mixed-sess", "q2", "a2", "client-a")
+    _post_accepted_turn("mixed-sess", "q3", "a3", "client-a")
+
+    # Only the accepted turn triggered a direct write.
+    assistant_writes = [c for c in calls if c.get("source") == "assistant_response"]
+    assert len(assistant_writes) == 1
+    assert assistant_writes[0]["_args"][0] == "q3"
+
+    bridge._on_session_finalize(session_id="mixed-sess")
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+    transcript = syntheses[0]["user_prompt"]
+    assert transcript.count("USER: q1") == 1
+    assert transcript.count("USER: q2") == 1
+    assert transcript.count("USER: q3") == 1
+    meta = syntheses[0]["metadata"]
+    assert meta.get("accepted_count") == 1
+    assert meta.get("context_only_count") == 2
+
+
+def test_accepted_write_failure_excludes_turn_from_synthesis(monkeypatch):
+    """A store_candidate=true direct write that fails must not enter synthesis."""
+    _enable_synth(monkeypatch, min_turns=1)
+    calls = []
+
+    def fake_async_failure(*args, **kwargs):
+        calls.append(kwargs)
+        _complete_fake_write(kwargs, success=False)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async_failure)
+
+    _post_accepted_turn("fail-accepted-sess", "q1", "a1", "client-a")
+    _post_context_only_turn("fail-accepted-sess", "q2", "a2", "client-a")
+
+    bridge._on_session_finalize(session_id="fail-accepted-sess")
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+    transcript = syntheses[0]["user_prompt"]
+    assert "USER: q1" not in transcript
+    assert "ASSISTANT: a1" not in transcript
+    assert "USER: q2" in transcript
+    meta = syntheses[0]["metadata"]
+    assert meta.get("accepted_count") == 0
+    assert meta.get("context_only_count") == 1
+
+
+def test_three_context_only_turns_trigger_synthesis(monkeypatch):
+    """Only context_only safe turns can meet the min-turn threshold."""
+    _enable_synth(monkeypatch, min_turns=3)
+    calls = []
+
+    def fake_async(*args, **kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+
+    for i in range(3):
+        _post_context_only_turn("only-ctx-sess", f"q{i+1}", f"a{i+1}", "client-a")
+
+    # No direct writes attempted.
+    assert [c for c in calls if c.get("source") == "assistant_response"] == []
+
+    bridge._on_session_finalize(session_id="only-ctx-sess")
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+    meta = syntheses[0]["metadata"]
+    assert meta.get("accepted_count") == 0
+    assert meta.get("context_only_count") == 3
+
+
+def test_context_only_blacklisted_prompt_is_excluded(monkeypatch):
+    """Blacklisted content never enters the session context buffer."""
+    _enable_synth(monkeypatch, min_turns=1)
+    calls = []
+    monkeypatch.setattr(bridge, "_bdh_query_async", lambda *a, **kw: calls.append(kw))
+
+    blacklisted = "Review the conversation above and update the skill library."
+    _post_context_only_turn("blacklist-ctx", blacklisted, "answer", "client-a")
+
+    assert bridge._session_buffers.get("blacklist-ctx", []) == []
+    bridge._on_session_finalize(session_id="blacklist-ctx")
+    assert [c for c in calls if c.get("source") == "session_synthesis"] == []
+
+
+def test_context_only_truncated_response_is_excluded(monkeypatch):
+    """A non-stop finish_reason excludes the context-only turn from synthesis."""
+    _enable_synth(monkeypatch, min_turns=1)
+    calls = []
+    monkeypatch.setattr(bridge, "_bdh_query_async", lambda *a, **kw: calls.append(kw))
+
+    state_kwargs = {"session_id": "trunc-ctx"}
+    bridge._remember_turn_state(state_kwargs, "question")
+    bridge._update_turn_state(
+        state_kwargs,
+        rewritten_query="question",
+        should_retrieve=False,
+        store_candidate=False,
+    )
+    bridge._on_post_api_request(
+        session_id="trunc-ctx",
+        finish_reason="length",
+        assistant_message=type("Message", (), {"content": "truncated"})(),
+    )
+
+    assert bridge._session_buffers.get("trunc-ctx", []) == []
+    bridge._on_session_finalize(session_id="trunc-ctx")
+    assert [c for c in calls if c.get("source") == "session_synthesis"] == []
+
+
+def test_context_only_cron_without_opt_in_is_excluded(monkeypatch):
+    """Cron source without the opt-in marker never enters session context."""
+    _enable_synth(monkeypatch, min_turns=1)
+    calls = []
+    monkeypatch.setattr(bridge, "_bdh_query_async", lambda *a, **kw: calls.append(kw))
+
+    state_kwargs = {"session_id": "cron-ctx"}
+    bridge._remember_turn_state(state_kwargs, "cron job summary")
+    bridge._update_turn_state(
+        state_kwargs,
+        rewritten_query="cron job summary",
+        should_retrieve=False,
+        store_candidate=False,
+    )
+    bridge._on_post_api_request(
+        session_id="cron-ctx",
+        finish_reason="stop",
+        platform="cron",
+        source="scheduled_task",
+        assistant_message=type("Message", (), {"content": "cron answer"})(),
+    )
+
+    assert bridge._session_buffers.get("cron-ctx", []) == []
+    bridge._on_session_finalize(session_id="cron-ctx")
+    assert [c for c in calls if c.get("source") == "session_synthesis"] == []
+
+
+def test_context_only_unresolved_scope_is_excluded(monkeypatch):
+    """A context-only turn with unresolved vault scope cannot be buffered."""
+    _set_scope_map(monkeypatch, {})
+    _enable_synth(monkeypatch, min_turns=1)
+    calls = []
+    monkeypatch.setattr(bridge, "_bdh_query_async", lambda *a, **kw: calls.append(kw))
+
+    bridge._on_pre_llm_call(
+        session_id="unresolved-ctx",
+        project_id="unknown-project",
+        user_message="some question",
+    )
+    bridge._on_post_api_request(
+        session_id="unresolved-ctx",
+        finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "some answer"})(),
+    )
+
+    assert bridge._session_buffers.get("unresolved-ctx", []) == []
+    bridge._on_session_finalize(session_id="unresolved-ctx")
+    assert [c for c in calls if c.get("source") == "session_synthesis"] == []
+
+
+def test_context_only_mixed_vault_scope_rejects_synthesis(monkeypatch):
+    """Context-only turns from different vaults still reject mixed synthesis."""
+    _enable_synth(monkeypatch, min_turns=2)
+    calls = []
+    monkeypatch.setattr(bridge, "_bdh_query_async", lambda *a, **kw: calls.append(kw))
+
+    _post_context_only_turn("mixed-vault-ctx", "q-a", "a-a", "vault-a")
+    _post_context_only_turn("mixed-vault-ctx", "q-b", "a-b", "vault-b")
+
+    bridge._on_session_finalize(session_id="mixed-vault-ctx")
+    assert [c for c in calls if c.get("source") == "session_synthesis"] == []
+    assert "mixed-vault-ctx" not in bridge._session_buffers
+
+
+def test_context_only_pending_write_finalize_race_is_safe(monkeypatch):
+    """A pending accepted write blocks finalize until completion, including context turns."""
+    _enable_synth(monkeypatch, min_turns=1)
+    calls = []
+    pending = []
+
+    def fake_async(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            pending.append(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+
+    _post_accepted_turn("race-ctx", "q1", "a1", "client-a")
+    _post_context_only_turn("race-ctx", "q2", "a2", "client-a")
+
+    bridge._on_session_finalize(session_id="race-ctx")
+    assert [c for c in calls if c.get("source") == "session_synthesis"] == []
+
+    # Complete the accepted write; only then finalize flushes both turns.
+    _complete_fake_write(pending[0])
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+    transcript = syntheses[0]["user_prompt"]
+    assert "USER: q1" in transcript
+    assert "USER: q2" in transcript
+
+
+def test_context_only_turns_preserve_existing_session_synthesis_tests(monkeypatch):
+    """Original accepted-only synthesis still works after adding context_only path."""
+    _enable_synth(monkeypatch, min_turns=2)
+    calls = []
+
+    def fake_async(*args, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get("source") == "assistant_response":
+            _complete_fake_write(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+
+    _post_accepted_turn("accepted-only-sess", "q1", "a1", "client-a")
+    _post_accepted_turn("accepted-only-sess", "q2", "a2", "client-a")
+
+    bridge._on_session_finalize(session_id="accepted-only-sess")
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 1
+    meta = syntheses[0]["metadata"]
+    assert meta.get("accepted_count") == 2
+    assert meta.get("context_only_count") == 0
+

@@ -4,6 +4,13 @@ BDH Bridge — Bidirectional Hermes ↔ BDH Graph Harness integration.
 Write path: feeds session content to BDH after each API response.
 Read path: provides bdh_query and bdh_stats tools.
 
+v0.10.0:
+  - Session synthesis context-only retention: turns where `store_candidate=false`
+    are no longer dropped immediately. Safe, complete context-only turns are
+    retained in the session buffer so later durable turns keep their causal
+    context, while direct writes still only enter the buffer on success.
+    Audit metadata now distinguishes accepted_count from context_only_count.
+
 v0.9.0:
   - Session synthesis audit metadata: propagate `metadata` (synthesis_id,
     session_id, queued_at, transcript_sha256) through `_bdh_query_async`
@@ -965,13 +972,16 @@ def _pop_turn_state(kwargs):
 # Session-end synthesis helpers (v0.7.0)
 # ---------------------------------------------------------------------------
 
-def _remember_session_turn(session_id, user_message, assistant_text, vault_id=None):
-    """Append one written turn and its resolved vault to the session buffer.
+def _remember_session_turn(session_id, user_message, assistant_text,
+                           vault_id=None, context_only=False):
+    """Append one safe turn and its resolved vault to the session buffer.
 
-    Only called when the per-turn write path actually succeeded, so the
-    synthesis never introduces content that wasn't already fed to BDH. The
-    vault scope is retained per turn so a mixed-scope session can be rejected
-    rather than merged into one client's vault.
+    ``context_only=False`` means the turn was already written directly to BDH
+    and the synthesis merely reuses it. ``context_only=True`` means the turn
+    was not durable enough for a direct write but is still useful causal
+    context for session-level synthesis. In both cases the vault scope is
+    retained per turn so a mixed-scope session can be rejected rather than
+    merged into one client's vault.
     """
     if not session_id or not _SESSION_SYNTH_ENABLED:
         return
@@ -989,6 +999,7 @@ def _remember_session_turn(session_id, user_message, assistant_text, vault_id=No
             "user": (user_message or "")[:1500],
             "assistant": (assistant_text or "")[:1500],
             "vault_id": vault_id,
+            "context_only": bool(context_only),
         })
 
 
@@ -1034,9 +1045,15 @@ def _flush_session_synthesis(session_id):
 
     # Compact the transcript, keeping user questions and assistant answers.
     lines = []
+    accepted_count = 0
+    context_only_count = 0
     for t in buf:
         u = t.get("user", "").strip()
         a = t.get("assistant", "").strip()
+        if t.get("context_only"):
+            context_only_count += 1
+        else:
+            accepted_count += 1
         if not u:
             continue
         lines.append(f"USER: {u}")
@@ -1047,14 +1064,16 @@ def _flush_session_synthesis(session_id):
         transcript = transcript[-_SESSION_SYNTH_MAX_CHARS:]
 
     # Audit metadata: a unique request id, the originating session, a queue
-    # timestamp, and a SHA-256 of the bounded transcript. The raw transcript
-    # never enters the audit record — only its hash, which lets downstream
-    # consumers correlate requests without re-deriving content.
+    # timestamp, a SHA-256 of the bounded transcript, and non-secret counts that
+    # distinguish accepted (already durable) turns from context-only turns. The
+    # raw transcript never enters the audit record — only its hash.
     metadata = {
         "synthesis_id": str(uuid.uuid4()),
         "session_id": session_id,
         "queued_at": time.time(),
         "transcript_sha256": hashlib.sha256(transcript.encode("utf-8")).hexdigest(),
+        "accepted_count": accepted_count,
+        "context_only_count": context_only_count,
     }
 
     query = (
@@ -1801,8 +1820,18 @@ def _on_post_api_request(**kwargs):
         store_candidate = turn_state.get("store_candidate")
         if store_candidate is None:
             store_candidate = turn_state.get("should_query")
+
+        session_id = kwargs.get("session_id")
+        captured_vault_id = turn_state.get("vault_id")
         if store_candidate is False:
-            logger.info("[bdh-bridge] write skipped — store_candidate=false")
+            # v0.10.0: turns that are not durable enough for a direct write can
+            # still carry causal context needed by later turns in the same
+            # session. Buffer them as context_only for session synthesis.
+            _remember_session_turn(
+                session_id, user_message, text, captured_vault_id,
+                context_only=True,
+            )
+            logger.info("[bdh-bridge] write skipped — store_candidate=false; retained as context_only")
             return
 
         # Use the USER MESSAGE as the embedding seed (query) — that's the signal.
@@ -1812,11 +1841,9 @@ def _on_post_api_request(**kwargs):
         # user-language/intent field, so the write path stays provider-neutral.
         query = (turn_state["rewritten_query"] or user_message)[:1500]
         user_prompt = text[:1500]
-        captured_vault_id = turn_state.get("vault_id")
 
         # v0.7.0/#15: remember the turn only after a successful write, and
         # release the pending barrier on both success and failure.
-        session_id = kwargs.get("session_id")
         pending_registered = bool(session_id and _SESSION_SYNTH_ENABLED)
         if pending_registered:
             with _bdh_state_lock:
@@ -2021,7 +2048,7 @@ _BDH_STATS_SCHEMA = {
 # Minimal plugin metadata returned for Hermes introspection.
 PLUGIN = {
     "name": "bdh-bridge",
-    "version": "0.8.1",
+    "version": "0.10.0",
     "description": "Bidirectional Hermes ↔ BDH Graph Harness bridge with independent rewrite routing, normalization, session synthesis, and lifecycle hooks.",
 }
 

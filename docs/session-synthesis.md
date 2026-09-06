@@ -47,8 +47,11 @@ pre_llm_call
         ▼
 post_api_request
   ├─ apply the write/routing gate
-  ├─ submit the normal per-turn write asynchronously
-  └─ after a successful write, buffer the user/assistant pair + resolved vault
+  ├─ if store_candidate=true:
+  │     submit the normal per-turn write asynchronously
+  │     after a successful write, buffer as accepted
+  └─ if store_candidate=false and the turn is safe:
+        buffer as context-only (no direct write)
         │
         ▼
 finalize / reset / session boundary
@@ -65,19 +68,39 @@ to flush.
 
 ## What is buffered
 
-A turn enters the synthesis buffer only after its normal BDH write request
-succeeds. Each buffered item contains:
+A turn enters the synthesis buffer only when it is safe for learning. There are
+now two categories:
+
+- **Accepted** — the turn was written directly to BDH (`store_candidate=true`)
+  and the HTTP write succeeded. These turns are buffered from the `on_success`
+  callback.
+- **Context-only** — the turn was not durable enough for a direct write
+  (`store_candidate=false`) but the response is complete and safe. These turns
+  carry causal context needed by later turns in the same session; they are
+  buffered immediately without calling BDH.
+
+Each buffered item contains:
 
 - the user message, capped at 1,500 characters;
 - the assistant response, capped at 1,500 characters;
-- the resolved `vault_id` for that turn.
+- the resolved `vault_id` for that turn;
+- a `context_only` boolean flag distinguishing the two categories.
 
 The in-memory buffer is capped at 200 turns per session. The final transcript
 is capped by `BDH_SESSION_SYNTH_MAX_CHARS` and is rendered as `USER:` /
 `ASSISTANT:` pairs.
 
-Failed per-turn writes never enter the buffer. A late completion callback cannot
-resurrect a session that has already been finalized.
+The following are excluded from the buffer:
+
+- failed per-turn writes;
+- truncated (`finish_reason != stop`) responses;
+- blacklisted prompts;
+- cron sources without the explicit BDH opt-in marker;
+- turns with unresolved vault scope;
+- turns with empty user or assistant content.
+
+A late completion callback cannot resurrect a session that has already been
+finalized.
 
 ## Vault routing and isolation
 
@@ -145,6 +168,8 @@ The metadata dict contains:
 | `session_id` | `str` | The Hermes session that produced this synthesis |
 | `queued_at` | `float` | Unix timestamp when the request was queued |
 | `transcript_sha256` | `str` | SHA-256 hex digest of the bounded transcript |
+| `accepted_count` | `int` | Turns already written directly to BDH |
+| `context_only_count` | `int` | Turns retained as context without a direct write |
 
 The raw transcript never enters the audit record — only its hash, which
 lets downstream consumers verify transcript integrity without re-deriving

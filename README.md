@@ -8,7 +8,7 @@ Bidirectional plugin bridge between [Hermes Agent](https://github.com/NousResear
 
 The plugin connects Hermes' real conversations to BDH's neural knowledge graph and exposes BDH context as native Hermes tools. It learns from actual usage — not fabricated bridge queries.
 
-> **Status:** standalone Hermes plugin, version **0.8.1**.
+> **Status:** standalone Hermes plugin, version **0.10.0**.
 
 ## What it does
 
@@ -49,9 +49,11 @@ The original user message remains the primary signal. BDH context supports it; i
 
 Automatic retrieval uses the vault's Hybrid index: Chroma cosine KNN plus BM25 lexical scoring. BDH exposes raw routing metadata (`vector_top_score`, `bm25_top_score`, `bm25_matched_terms`, `hybrid_top_score`, and `hybrid_margin`) before graph expansion. The bridge injects context when there are at least two lexical term matches or a strong semantic vector score. This is experimental routing logic; it does not modify Hebbian state.
 
-### Session-end synthesis (v0.9.0, opt-in)
+### Session-end synthesis (v0.10.0, opt-in)
 
-When `BDH_SESSION_SYNTH_ENABLED=true`, the bridge buffers only successfully written turns and submits one bounded synthesis request when Hermes finalizes or resets a session. The request extracts durable decisions, architecture choices, and lessons learned instead of copying transient conversation noise. The resolved vault from the semantic router is propagated to the per-turn write and the final synthesis; mixed-vault sessions are rejected. The synthesis is asynchronous and never changes the current answer. Each synthesis request carries audit metadata (`synthesis_id`, `session_id`, `queued_at`, `transcript_sha256`) so downstream consumers can correlate requests without storing the raw transcript. See the detailed [session-end synthesis documentation](docs/session-synthesis.md), including lifecycle, scope isolation, configuration, model selection, and verification.
+When `BDH_SESSION_SYNTH_ENABLED=true`, the bridge buffers safe turns and submits one bounded synthesis request when Hermes finalizes or resets a session. Turns that were written directly to BDH (`store_candidate=true`) are buffered as **accepted** turns after the write succeeds. Turns that are not durable enough for a direct write (`store_candidate=false`) but are otherwise safe and complete are buffered as **context-only** turns so later turns in the same session keep their causal context. Failed/truncated responses, blacklisted prompts, cron messages without explicit opt-in, unresolved vault scope, and empty content are excluded from the buffer.
+
+The request extracts durable decisions, architecture choices, and lessons learned instead of copying transient conversation noise. The resolved vault from the semantic router is propagated to the per-turn write and the final synthesis; mixed-vault sessions are rejected. The synthesis is asynchronous and never changes the current answer. Each synthesis request carries audit metadata (`synthesis_id`, `session_id`, `queued_at`, `transcript_sha256`, `accepted_count`, `context_only_count`) so downstream consumers can correlate requests without storing the raw transcript. See the detailed [session-end synthesis documentation](docs/session-synthesis.md), including lifecycle, scope isolation, configuration, model selection, and verification.
 
 ### Query classification + rewrite pipeline (v0.8.0, opt-in)
 
