@@ -10,7 +10,6 @@ provides_hooks:
   - transform_llm_output
   - on_session_finalize
   - on_session_reset
-  - on_session_idle
 provides_tools:
   - bdh_query
   - bdh_stats
