@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.bdh.session-synthesis-watcher</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/albi/.hermes/hermes-agent/venv/bin/python</string>
+    <string>/Users/albi/Projects/bdh-hermes-bridge/.worktrees/t_aa8a87ce/session_synthesis_watcher.py</string>
+    <string>--interval</string>
+    <string>60</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/albi/Projects/bdh-hermes-bridge/.worktrees/t_aa8a87ce</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HERMES_HOME</key>
+    <string>/Users/albi/.hermes</string>
+    <key>PYTHONPATH</key>
+    <string>/Users/albi/Projects/bdh-hermes-bridge/.worktrees/t_aa8a87ce</string>
+    <key>BDH_API_URL</key>
+    <string>http://127.0.0.1:8643</string>
+    <key>BDH_SESSION_SYNTH_ENABLED</key>
+    <string>true</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/albi/.hermes/logs/bdh-session-synthesis-watcher.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/albi/.hermes/logs/bdh-session-synthesis-watcher.error.log</string>
+</dict>
+</plist>
