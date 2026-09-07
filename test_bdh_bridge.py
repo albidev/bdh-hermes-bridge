@@ -1758,11 +1758,10 @@ def test_register_wires_session_lifecycle_hooks():
     bridge.register(FakeApp())
     assert "on_session_finalize" in hooks
     assert "on_session_reset" in hooks
-    assert "on_session_idle" in hooks
 
 
 # ---------------------------------------------------------------------------
-# v0.11.0: epoch-aware idle flush (on_session_idle)
+# v0.11.0: bridge-owned epoch-aware idle flush
 # ---------------------------------------------------------------------------
 
 

@@ -2179,9 +2179,7 @@ def register(app):
     # v0.7.1: session lifecycle hooks for synthesis flush (issue #14)
     app.register_hook("on_session_finalize", _on_session_finalize)
     app.register_hook("on_session_reset", _on_session_reset)
-    # v0.11.0: non-destructive idle flush (epoch-aware synthesis)
-    app.register_hook("on_session_idle", _on_session_idle)
-    # Bridge-owned watcher: no Hermes core or Mission Control lifecycle dependency.
+    # Bridge-owned watcher calls _on_session_idle directly; no Hermes core idle hook required.
     _start_session_idle_watcher()
 
     app.register_tool(
