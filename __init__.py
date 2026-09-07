@@ -82,6 +82,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import threading
 import time
 import urllib.request
@@ -89,6 +90,8 @@ import urllib.parse
 import uuid
 from pathlib import Path
 from urllib.error import URLError
+
+from session_idle import SessionIdleWatcher
 
 logger = logging.getLogger("bdh-bridge")
 
@@ -156,11 +159,66 @@ _session_finalize_requested = set()  # sessions waiting for pending writes to se
 _session_idle_requested = set()  # sessions waiting for pending writes before an idle flush
 _bdh_used_sessions = set()
 _bdh_state_lock = threading.Lock()
+_SESSION_SYNTH_IDLE_SECONDS = float(os.environ.get("BDH_SESSION_SYNTH_IDLE_SECONDS", "300") or 300)
+_SESSION_SYNTH_IDLE_POLL_SECONDS = float(os.environ.get("BDH_SESSION_SYNTH_IDLE_POLL_SECONDS", "60") or 60)
+_session_idle_watcher = None
+_session_idle_watcher_stop = None
 # Resolved client/project scopes are bound to a session after the first scoped
 # turn. This prevents a later hook with missing or changed metadata from
 # silently switching vaults mid-session.
 _session_scope_bindings = {}  # session_id -> {vault_id, scope_key}
 _AUTO_RETRIEVAL_MIN_SCORE = 0.30
+
+
+def _bridge_session_ids_for_idle() -> set[str]:
+    with _bdh_state_lock:
+        return set(_session_buffers)
+
+
+def _bridge_activity_snapshot(session_ids: set[str]) -> dict[str, float | None]:
+    """Read the durable activity clock without importing or modifying Hermes core."""
+    if not session_ids:
+        return {}
+    home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+    db_path = home / "state.db"
+    placeholders = ",".join("?" for _ in session_ids)
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1.0) as db:
+            rows = db.execute(
+                f"SELECT id, last_activity_at FROM sessions WHERE id IN ({placeholders})",
+                tuple(session_ids),
+            ).fetchall()
+        return {str(session_id): activity for session_id, activity in rows}
+    except (OSError, sqlite3.Error):
+        return {}
+
+
+def _start_session_idle_watcher() -> None:
+    global _session_idle_watcher, _session_idle_watcher_stop
+    if not _SESSION_SYNTH_ENABLED or _session_idle_watcher is not None:
+        return
+    try:
+        home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+        state_path = Path(os.environ.get(
+            "BDH_SESSION_SYNTH_IDLE_STATE_FILE",
+            str(home / "bdh-session-idle.json"),
+        ))
+        threshold = max(30.0, min(_SESSION_SYNTH_IDLE_SECONDS, 7 * 24 * 60 * 60))
+        interval = max(1.0, min(_SESSION_SYNTH_IDLE_POLL_SECONDS, 300.0))
+        _session_idle_watcher = SessionIdleWatcher(
+            state_path,
+            threshold_seconds=threshold,
+            on_idle=lambda session_id: _on_session_idle(session_id=session_id),
+        )
+        _session_idle_watcher_stop = _session_idle_watcher.start(
+            _bridge_activity_snapshot,
+            _bridge_session_ids_for_idle,
+            interval_seconds=interval,
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        logger.warning("[bdh-bridge] idle watcher start failed: %s", exc)
+
+
 # Cron jobs are operational by default. A job must opt in explicitly in its
 # own prompt before the bridge may read from or write to BDH.
 BDH_CRON_OPT_IN_MARKER = "[BDH:ALLOW-CRON]"
@@ -1008,6 +1066,8 @@ def _remember_session_turn(session_id, user_message, assistant_text,
             "vault_id": vault_id,
             "context_only": bool(context_only),
         })
+    if _session_idle_watcher is not None:
+        _session_idle_watcher.mark_live(session_id)
 
 
 def _flush_session_synthesis(session_id, final=True):
@@ -2121,6 +2181,8 @@ def register(app):
     app.register_hook("on_session_reset", _on_session_reset)
     # v0.11.0: non-destructive idle flush (epoch-aware synthesis)
     app.register_hook("on_session_idle", _on_session_idle)
+    # Bridge-owned watcher: no Hermes core or Mission Control lifecycle dependency.
+    _start_session_idle_watcher()
 
     app.register_tool(
         name="bdh_query",
