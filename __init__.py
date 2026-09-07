@@ -92,6 +92,7 @@ from pathlib import Path
 from urllib.error import URLError
 
 from session_idle import SessionIdleWatcher
+from session_buffer import DurableSessionBuffer
 
 logger = logging.getLogger("bdh-bridge")
 
@@ -163,6 +164,7 @@ _SESSION_SYNTH_IDLE_SECONDS = float(os.environ.get("BDH_SESSION_SYNTH_IDLE_SECON
 _SESSION_SYNTH_IDLE_POLL_SECONDS = float(os.environ.get("BDH_SESSION_SYNTH_IDLE_POLL_SECONDS", "60") or 60)
 _session_idle_watcher = None
 _session_idle_watcher_stop = None
+_session_buffer_store = None
 # Resolved client/project scopes are bound to a session after the first scoped
 # turn. This prevents a later hook with missing or changed metadata from
 # silently switching vaults mid-session.
@@ -194,11 +196,21 @@ def _bridge_activity_snapshot(session_ids: set[str]) -> dict[str, float | None]:
 
 
 def _start_session_idle_watcher() -> None:
-    global _session_idle_watcher, _session_idle_watcher_stop
+    global _session_idle_watcher, _session_idle_watcher_stop, _session_buffer_store
     if not _SESSION_SYNTH_ENABLED or _session_idle_watcher is not None:
         return
     try:
         home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+        buffer_path = Path(os.environ.get(
+            "BDH_SESSION_SYNTH_BUFFER_FILE",
+            str(home / "bdh-session-synthesis-buffer.json"),
+        ))
+        _session_buffer_store = DurableSessionBuffer(buffer_path)
+        recovered = _session_buffer_store.all_sessions()
+        with _bdh_state_lock:
+            for session_id, turns in recovered.items():
+                if session_id not in _flushed_sessions and turns:
+                    _session_buffers[session_id] = turns
         state_path = Path(os.environ.get(
             "BDH_SESSION_SYNTH_IDLE_STATE_FILE",
             str(home / "bdh-session-idle.json"),
@@ -1068,6 +1080,13 @@ def _remember_session_turn(session_id, user_message, assistant_text,
         })
     if _session_idle_watcher is not None:
         _session_idle_watcher.mark_live(session_id)
+    if _session_buffer_store is not None:
+        _session_buffer_store.append(session_id, {
+            "user": (user_message or "")[:1500],
+            "assistant": (assistant_text or "")[:1500],
+            "vault_id": vault_id,
+            "context_only": bool(context_only),
+        })
 
 
 def _flush_session_synthesis(session_id, final=True):
@@ -1104,6 +1123,8 @@ def _flush_session_synthesis(session_id, final=True):
                 _flushed_sessions.add(session_id)
                 _session_finalize_requested.discard(session_id)
                 _session_idle_requested.discard(session_id)
+                if _session_buffer_store is not None:
+                    _session_buffer_store.remove(session_id)
             # Idle: leave the buffer intact; the epoch stays open for a later
             # flush once enough turns have accumulated.
             return
@@ -1126,6 +1147,8 @@ def _flush_session_synthesis(session_id, final=True):
             f"[bdh-bridge] session {session_id}: mixed vault scopes "
             f"({scopes!r}) — synthesis rejected"
         )
+        if _session_buffer_store is not None:
+            _session_buffer_store.remove(session_id)
         return
     synthesis_vault_id = next(iter(scopes), None)
 
@@ -1182,6 +1205,8 @@ def _flush_session_synthesis(session_id, final=True):
             vault_id=synthesis_vault_id,
             metadata=metadata,
         )
+        if _session_buffer_store is not None:
+            _session_buffer_store.remove(session_id)
         logger.info(f"[bdh-bridge] session {session_id} synthesis queued ({len(buf)} turns)")
     except Exception as e:
         logger.warning(f"[bdh-bridge] session synthesis start error: {e}")
