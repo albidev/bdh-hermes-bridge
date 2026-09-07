@@ -1089,7 +1089,7 @@ def _remember_session_turn(session_id, user_message, assistant_text,
         })
 
 
-def _flush_session_synthesis(session_id, final=True):
+def _flush_session_synthesis(session_id, final=True, wait=False):
     """Fire-and-forget a curated session synthesis to BDH, if worth it.
 
     ``final=True`` (finalize/reset) is the authoritative teardown: the buffer
@@ -1204,6 +1204,7 @@ def _flush_session_synthesis(session_id, final=True):
             source="session_synthesis",
             vault_id=synthesis_vault_id,
             metadata=metadata,
+            wait=wait,
         )
         if _session_buffer_store is not None:
             _session_buffer_store.remove(session_id)
@@ -1462,7 +1463,7 @@ def _format_bdh_context(result):
 
 def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
                      on_success=None, on_complete=None, vault_id=None,
-                     metadata=None):
+                     metadata=None, wait=False):
     """Fire-and-forget query — used by hooks.
 
     Short timeout (30s) and 1 retry. If BDH is down, the daemon thread
@@ -1529,10 +1530,11 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
                         f"[bdh-bridge] on_complete callback error: {cb_err}"
                     )
 
-    threading.Thread(target=_worker, daemon=True).start()
-
-
-# ---------------------------------------------------------------------------
+    worker = threading.Thread(target=_worker, daemon=not wait)
+    worker.start()
+    if wait:
+        worker.join(timeout=_SESSION_SYNTH_TIMEOUT + 10)
+    return worker
 # Query rewrite pipeline (v0.8.0)
 # ---------------------------------------------------------------------------
 
