@@ -1369,6 +1369,25 @@ def test_session_finalize_below_min_turns_skips(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_session_synthesis_id_is_deterministic_for_same_epoch_content(monkeypatch):
+    """The durable synthesis key remains stable across a retry of the same content."""
+    _enable_synth(monkeypatch, min_turns=2)
+    calls = []
+
+    def fake_async(*args, **kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(bridge, "_bdh_query_async", fake_async)
+    for _ in range(2):
+        for question, answer in (("same question", "same answer"), ("same question 2", "same answer 2")):
+            bridge._remember_session_turn("retry-sess", question, answer, "core")
+        bridge._on_session_idle(session_id="retry-sess")
+
+    syntheses = [c for c in calls if c.get("source") == "session_synthesis"]
+    assert len(syntheses) == 2
+    assert syntheses[0]["metadata"]["synthesis_id"] == syntheses[1]["metadata"]["synthesis_id"]
+
+
 def test_session_synthesis_includes_audit_metadata(monkeypatch):
     """A queued synthesis carries synthesis_id, session_id, queued_at, and transcript_sha256."""
     _enable_synth(monkeypatch, min_turns=2)

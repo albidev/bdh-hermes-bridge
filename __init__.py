@@ -1089,15 +1089,19 @@ def _flush_session_synthesis(session_id, final=True):
     if len(transcript) > _SESSION_SYNTH_MAX_CHARS:
         transcript = transcript[-_SESSION_SYNTH_MAX_CHARS:]
 
-    # Audit metadata: a unique request id, the originating session, a queue
-    # timestamp, a SHA-256 of the bounded transcript, and non-secret counts that
-    # distinguish accepted (already durable) turns from context-only turns. The
-    # raw transcript never enters the audit record — only its hash.
+    transcript_sha256 = hashlib.sha256(transcript.encode("utf-8")).hexdigest()
+
+    # Audit metadata: a deterministic synthesis id makes retries of the same
+    # session epoch idempotent downstream. The transcript itself never enters
+    # the audit record — only its hash.
     metadata = {
-        "synthesis_id": str(uuid.uuid4()),
+        "synthesis_id": str(uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"bdh-session-synthesis:v1:{session_id}:{transcript_sha256}",
+        )),
         "session_id": session_id,
         "queued_at": time.time(),
-        "transcript_sha256": hashlib.sha256(transcript.encode("utf-8")).hexdigest(),
+        "transcript_sha256": transcript_sha256,
         "accepted_count": accepted_count,
         "context_only_count": context_only_count,
     }
