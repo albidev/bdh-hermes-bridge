@@ -63,6 +63,17 @@ class TranscriptIdleWatcher:
             ).strip()
         return str(value or "").strip()
 
+    @staticmethod
+    def _resolve_recovered_vault(turns: list[dict[str, Any]]) -> str | None:
+        query = "\n".join(str(turn.get("user") or "") for turn in turns).strip()
+        if not query:
+            return None
+        try:
+            from vault_router import suggest_vault
+            return suggest_vault(query)
+        except (ImportError, OSError, ValueError, TypeError):
+            return None
+
     def rebuild_turns(self, session_id: str) -> list[dict[str, Any]]:
         """Reconstruct conservative pairs; tool/system rows are never buffered."""
         try:
@@ -89,6 +100,10 @@ class TranscriptIdleWatcher:
                         "context_only": True,
                     })
                 pending_user = None
+        vault_id = self._resolve_recovered_vault(turns)
+        if vault_id:
+            for turn in turns:
+                turn["vault_id"] = vault_id
         return turns[-200:]
 
     def _on_idle(self, session_id: str) -> None:
