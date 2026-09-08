@@ -4,6 +4,19 @@ BDH Bridge — Bidirectional Hermes ↔ BDH Graph Harness integration.
 Write path: feeds session content to BDH after each API response.
 Read path: provides bdh_query and bdh_stats tools.
 
+v0.11.0:
+  - Epoch-aware idle flush: an explicit on_session_idle hook stages at most one
+    candidate synthesis for the current buffered epoch without resetting the
+    Hermes session. A later turn starts a new epoch, eligible for its own
+    idle/finalize flush. Finalize/reset remain authoritative fallbacks.
+
+v0.10.0:
+  - Session synthesis context-only retention: turns where `store_candidate=false`
+    are no longer dropped immediately. Safe, complete context-only turns are
+    retained in the session buffer so later durable turns keep their causal
+    context, while direct writes still only enter the buffer on success.
+    Audit metadata now distinguishes accepted_count from context_only_count.
+
 v0.9.0:
   - Session synthesis audit metadata: propagate `metadata` (synthesis_id,
     session_id, queued_at, transcript_sha256) through `_bdh_query_async`
@@ -69,6 +82,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import threading
 import time
 import urllib.request
@@ -76,6 +90,9 @@ import urllib.parse
 import uuid
 from pathlib import Path
 from urllib.error import URLError
+
+from session_idle import SessionIdleWatcher
+from session_buffer import DurableSessionBuffer
 
 logger = logging.getLogger("bdh-bridge")
 
@@ -140,13 +157,80 @@ _session_buffers = {}  # session_id -> list of {"user": ..., "assistant": ...}
 _flushed_sessions = set()  # session_ids already flushed — never double-flush
 _session_pending_writes = {}  # session_id -> number of in-flight per-turn writes
 _session_finalize_requested = set()  # sessions waiting for pending writes to settle
+_session_idle_requested = set()  # sessions waiting for pending writes before an idle flush
 _bdh_used_sessions = set()
 _bdh_state_lock = threading.Lock()
+_SESSION_SYNTH_IDLE_SECONDS = float(os.environ.get("BDH_SESSION_SYNTH_IDLE_SECONDS", "300") or 300)
+_SESSION_SYNTH_IDLE_POLL_SECONDS = float(os.environ.get("BDH_SESSION_SYNTH_IDLE_POLL_SECONDS", "60") or 60)
+_session_idle_watcher = None
+_session_idle_watcher_stop = None
+_session_buffer_store = None
 # Resolved client/project scopes are bound to a session after the first scoped
 # turn. This prevents a later hook with missing or changed metadata from
 # silently switching vaults mid-session.
 _session_scope_bindings = {}  # session_id -> {vault_id, scope_key}
 _AUTO_RETRIEVAL_MIN_SCORE = 0.30
+
+
+def _bridge_session_ids_for_idle() -> set[str]:
+    with _bdh_state_lock:
+        return set(_session_buffers)
+
+
+def _bridge_activity_snapshot(session_ids: set[str]) -> dict[str, float | None]:
+    """Read the durable activity clock without importing or modifying Hermes core."""
+    if not session_ids:
+        return {}
+    home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+    db_path = home / "state.db"
+    placeholders = ",".join("?" for _ in session_ids)
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1.0) as db:
+            rows = db.execute(
+                f"SELECT id, last_activity_at FROM sessions WHERE id IN ({placeholders})",
+                tuple(session_ids),
+            ).fetchall()
+        return {str(session_id): activity for session_id, activity in rows}
+    except (OSError, sqlite3.Error):
+        return {}
+
+
+def _start_session_idle_watcher() -> None:
+    global _session_idle_watcher, _session_idle_watcher_stop, _session_buffer_store
+    if not _SESSION_SYNTH_ENABLED or _session_idle_watcher is not None:
+        return
+    try:
+        home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+        buffer_path = Path(os.environ.get(
+            "BDH_SESSION_SYNTH_BUFFER_FILE",
+            str(home / "bdh-session-synthesis-buffer.json"),
+        ))
+        _session_buffer_store = DurableSessionBuffer(buffer_path)
+        recovered = _session_buffer_store.all_sessions()
+        with _bdh_state_lock:
+            for session_id, turns in recovered.items():
+                if session_id not in _flushed_sessions and turns:
+                    _session_buffers[session_id] = turns
+        state_path = Path(os.environ.get(
+            "BDH_SESSION_SYNTH_IDLE_STATE_FILE",
+            str(home / "bdh-session-idle.json"),
+        ))
+        threshold = max(30.0, min(_SESSION_SYNTH_IDLE_SECONDS, 7 * 24 * 60 * 60))
+        interval = max(1.0, min(_SESSION_SYNTH_IDLE_POLL_SECONDS, 300.0))
+        _session_idle_watcher = SessionIdleWatcher(
+            state_path,
+            threshold_seconds=threshold,
+            on_idle=lambda session_id: _on_session_idle(session_id=session_id),
+        )
+        _session_idle_watcher_stop = _session_idle_watcher.start(
+            _bridge_activity_snapshot,
+            _bridge_session_ids_for_idle,
+            interval_seconds=interval,
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        logger.warning("[bdh-bridge] idle watcher start failed: %s", exc)
+
+
 # Cron jobs are operational by default. A job must opt in explicitly in its
 # own prompt before the bridge may read from or write to BDH.
 BDH_CRON_OPT_IN_MARKER = "[BDH:ALLOW-CRON]"
@@ -965,13 +1049,16 @@ def _pop_turn_state(kwargs):
 # Session-end synthesis helpers (v0.7.0)
 # ---------------------------------------------------------------------------
 
-def _remember_session_turn(session_id, user_message, assistant_text, vault_id=None):
-    """Append one written turn and its resolved vault to the session buffer.
+def _remember_session_turn(session_id, user_message, assistant_text,
+                           vault_id=None, context_only=False):
+    """Append one safe turn and its resolved vault to the session buffer.
 
-    Only called when the per-turn write path actually succeeded, so the
-    synthesis never introduces content that wasn't already fed to BDH. The
-    vault scope is retained per turn so a mixed-scope session can be rejected
-    rather than merged into one client's vault.
+    ``context_only=False`` means the turn was already written directly to BDH
+    and the synthesis merely reuses it. ``context_only=True`` means the turn
+    was not durable enough for a direct write but is still useful causal
+    context for session-level synthesis. In both cases the vault scope is
+    retained per turn so a mixed-scope session can be rejected rather than
+    merged into one client's vault.
     """
     if not session_id or not _SESSION_SYNTH_ENABLED:
         return
@@ -989,11 +1076,27 @@ def _remember_session_turn(session_id, user_message, assistant_text, vault_id=No
             "user": (user_message or "")[:1500],
             "assistant": (assistant_text or "")[:1500],
             "vault_id": vault_id,
+            "context_only": bool(context_only),
+        })
+    if _session_idle_watcher is not None:
+        _session_idle_watcher.mark_live(session_id)
+    if _session_buffer_store is not None:
+        _session_buffer_store.append(session_id, {
+            "user": (user_message or "")[:1500],
+            "assistant": (assistant_text or "")[:1500],
+            "vault_id": vault_id,
+            "context_only": bool(context_only),
         })
 
 
-def _flush_session_synthesis(session_id):
+def _flush_session_synthesis(session_id, final=True, wait=False):
     """Fire-and-forget a curated session synthesis to BDH, if worth it.
+
+    ``final=True`` (finalize/reset) is the authoritative teardown: the buffer
+    is always drained and the session is marked flushed so a late callback can
+    never resurrect it. ``final=False`` (idle) is non-destructive: it stages at
+    most one synthesis for the current buffered epoch and leaves the session
+    alive, so a later turn starts a new epoch eligible for its own flush.
 
     If per-turn writes are still in flight, mark the lifecycle boundary and
     let their completion callback retry the flush. The hook itself remains
@@ -1006,18 +1109,33 @@ def _flush_session_synthesis(session_id):
         if session_id in _flushed_sessions:
             return
         if _session_pending_writes.get(session_id, 0):
-            _session_finalize_requested.add(session_id)
+            if final:
+                _session_finalize_requested.add(session_id)
+            else:
+                _session_idle_requested.add(session_id)
             return
-        _flushed_sessions.add(session_id)
-        _session_finalize_requested.discard(session_id)
+        buf = _session_buffers.get(session_id, [])
+        if len(buf) < _SESSION_SYNTH_MIN_TURNS:
+            if final:
+                # Authoritative teardown: drain so a short session can never be
+                # synthesized later.
+                _session_buffers.pop(session_id, None)
+                _flushed_sessions.add(session_id)
+                _session_finalize_requested.discard(session_id)
+                _session_idle_requested.discard(session_id)
+                if _session_buffer_store is not None:
+                    _session_buffer_store.remove(session_id)
+            # Idle: leave the buffer intact; the epoch stays open for a later
+            # flush once enough turns have accumulated.
+            return
+        # Worth synthesizing: drain the current epoch and mark it flushed.
+        if final:
+            _flushed_sessions.add(session_id)
+            _session_finalize_requested.discard(session_id)
+        else:
+            _session_idle_requested.discard(session_id)
         buf = _session_buffers.pop(session_id, None)
     if not buf:
-        return
-    if len(buf) < _SESSION_SYNTH_MIN_TURNS:
-        logger.debug(
-            f"[bdh-bridge] session {session_id}: only {len(buf)} turn(s), "
-            f"below min {_SESSION_SYNTH_MIN_TURNS} — skipping synthesis"
-        )
         return
 
     # A single synthesis request cannot safely contain turns from different
@@ -1029,14 +1147,22 @@ def _flush_session_synthesis(session_id):
             f"[bdh-bridge] session {session_id}: mixed vault scopes "
             f"({scopes!r}) — synthesis rejected"
         )
+        if _session_buffer_store is not None:
+            _session_buffer_store.remove(session_id)
         return
     synthesis_vault_id = next(iter(scopes), None)
 
     # Compact the transcript, keeping user questions and assistant answers.
     lines = []
+    accepted_count = 0
+    context_only_count = 0
     for t in buf:
         u = t.get("user", "").strip()
         a = t.get("assistant", "").strip()
+        if t.get("context_only"):
+            context_only_count += 1
+        else:
+            accepted_count += 1
         if not u:
             continue
         lines.append(f"USER: {u}")
@@ -1046,15 +1172,21 @@ def _flush_session_synthesis(session_id):
     if len(transcript) > _SESSION_SYNTH_MAX_CHARS:
         transcript = transcript[-_SESSION_SYNTH_MAX_CHARS:]
 
-    # Audit metadata: a unique request id, the originating session, a queue
-    # timestamp, and a SHA-256 of the bounded transcript. The raw transcript
-    # never enters the audit record — only its hash, which lets downstream
-    # consumers correlate requests without re-deriving content.
+    transcript_sha256 = hashlib.sha256(transcript.encode("utf-8")).hexdigest()
+
+    # Audit metadata: a deterministic synthesis id makes retries of the same
+    # session epoch idempotent downstream. The transcript itself never enters
+    # the audit record — only its hash.
     metadata = {
-        "synthesis_id": str(uuid.uuid4()),
+        "synthesis_id": str(uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            f"bdh-session-synthesis:v1:{session_id}:{transcript_sha256}",
+        )),
         "session_id": session_id,
         "queued_at": time.time(),
-        "transcript_sha256": hashlib.sha256(transcript.encode("utf-8")).hexdigest(),
+        "transcript_sha256": transcript_sha256,
+        "accepted_count": accepted_count,
+        "context_only_count": context_only_count,
     }
 
     query = (
@@ -1072,27 +1204,34 @@ def _flush_session_synthesis(session_id):
             source="session_synthesis",
             vault_id=synthesis_vault_id,
             metadata=metadata,
+            wait=wait,
         )
+        if _session_buffer_store is not None:
+            _session_buffer_store.remove(session_id)
         logger.info(f"[bdh-bridge] session {session_id} synthesis queued ({len(buf)} turns)")
     except Exception as e:
         logger.warning(f"[bdh-bridge] session synthesis start error: {e}")
 
 
 def _session_write_complete(session_id):
-    """Release one pending write and flush if lifecycle already finalized it."""
+    """Release one pending write and flush if a lifecycle boundary is waiting."""
     if not session_id:
         return
     session_id = str(session_id)
-    should_flush = False
+    should_flush_final = False
+    should_flush_idle = False
     with _bdh_state_lock:
         pending = _session_pending_writes.get(session_id, 0)
         if pending <= 1:
             _session_pending_writes.pop(session_id, None)
-            should_flush = session_id in _session_finalize_requested
+            should_flush_final = session_id in _session_finalize_requested
+            should_flush_idle = session_id in _session_idle_requested
         else:
             _session_pending_writes[session_id] = pending - 1
-    if should_flush:
-        _flush_session_synthesis(session_id)
+    if should_flush_final:
+        _flush_session_synthesis(session_id, final=True)
+    elif should_flush_idle:
+        _flush_session_synthesis(session_id, final=False)
 
 
 def _on_session_finalize(**kwargs):
@@ -1120,6 +1259,23 @@ def _on_session_reset(**kwargs):
             _forget_session_scope(old_session_id)
     except Exception as e:
         logger.debug(f"[bdh-bridge] on_session_reset error: {e}")
+
+
+def _on_session_idle(**kwargs):
+    """Flush the current epoch's synthesis when Hermes reports the session idle.
+
+    Unlike finalize/reset, an idle flush is non-destructive: it stages at most
+    one candidate synthesis for the current buffered epoch and leaves the
+    session alive. A later turn starts a new epoch, eligible for its own
+    idle/finalize flush. The scope binding is retained so the session keeps
+    routing to the same vault when it becomes active again.
+    """
+    try:
+        session_id = kwargs.get("session_id")
+        if session_id:
+            _flush_session_synthesis(session_id, final=False)
+    except Exception as e:
+        logger.debug(f"[bdh-bridge] on_session_idle error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -1307,7 +1463,7 @@ def _format_bdh_context(result):
 
 def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
                      on_success=None, on_complete=None, vault_id=None,
-                     metadata=None):
+                     metadata=None, wait=False):
     """Fire-and-forget query — used by hooks.
 
     Short timeout (30s) and 1 retry. If BDH is down, the daemon thread
@@ -1374,10 +1530,11 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
                         f"[bdh-bridge] on_complete callback error: {cb_err}"
                     )
 
-    threading.Thread(target=_worker, daemon=True).start()
-
-
-# ---------------------------------------------------------------------------
+    worker = threading.Thread(target=_worker, daemon=not wait)
+    worker.start()
+    if wait:
+        worker.join(timeout=_SESSION_SYNTH_TIMEOUT + 10)
+    return worker
 # Query rewrite pipeline (v0.8.0)
 # ---------------------------------------------------------------------------
 
@@ -1801,8 +1958,20 @@ def _on_post_api_request(**kwargs):
         store_candidate = turn_state.get("store_candidate")
         if store_candidate is None:
             store_candidate = turn_state.get("should_query")
+
+        session_id = kwargs.get("session_id")
+        captured_vault_id = turn_state.get("vault_id")
         if store_candidate is False:
-            logger.info("[bdh-bridge] write skipped — store_candidate=false")
+            # v0.10.0: turns that are not durable enough for a direct write can
+            # still carry causal context needed by later turns in the same
+            # session. Buffer them as context_only for session synthesis.
+            # They must NOT touch the pending-write barrier, which only tracks
+            # in-flight assistant_response writes.
+            _remember_session_turn(
+                session_id, user_message, text, captured_vault_id,
+                context_only=True,
+            )
+            logger.info("[bdh-bridge] write skipped — store_candidate=false; retained as context_only")
             return
 
         # Use the USER MESSAGE as the embedding seed (query) — that's the signal.
@@ -1812,11 +1981,9 @@ def _on_post_api_request(**kwargs):
         # user-language/intent field, so the write path stays provider-neutral.
         query = (turn_state["rewritten_query"] or user_message)[:1500]
         user_prompt = text[:1500]
-        captured_vault_id = turn_state.get("vault_id")
 
         # v0.7.0/#15: remember the turn only after a successful write, and
         # release the pending barrier on both success and failure.
-        session_id = kwargs.get("session_id")
         pending_registered = bool(session_id and _SESSION_SYNTH_ENABLED)
         if pending_registered:
             with _bdh_state_lock:
@@ -2021,7 +2188,7 @@ _BDH_STATS_SCHEMA = {
 # Minimal plugin metadata returned for Hermes introspection.
 PLUGIN = {
     "name": "bdh-bridge",
-    "version": "0.8.1",
+    "version": "0.11.0",
     "description": "Bidirectional Hermes ↔ BDH Graph Harness bridge with independent rewrite routing, normalization, session synthesis, and lifecycle hooks.",
 }
 
@@ -2039,6 +2206,8 @@ def register(app):
     # v0.7.1: session lifecycle hooks for synthesis flush (issue #14)
     app.register_hook("on_session_finalize", _on_session_finalize)
     app.register_hook("on_session_reset", _on_session_reset)
+    # Bridge-owned watcher calls _on_session_idle directly; no Hermes core idle hook required.
+    _start_session_idle_watcher()
 
     app.register_tool(
         name="bdh_query",
