@@ -31,6 +31,18 @@ def test_default_rewrite_prompt_contains_routing_few_shot_examples():
     assert '"should_retrieve":false,"store_candidate":true' in prompt
 
 
+def test_profile_scoped_vault_override_preserves_explicit_precedence(monkeypatch):
+    from agent.secret_scope import reset_secret_scope, set_secret_scope
+
+    monkeypatch.delenv("BDH_VAULT_ID", raising=False)
+    token = set_secret_scope({"BDH_VAULT_ID": "profile-vault"})
+    try:
+        assert bridge._resolve_vault_id() == "profile-vault"
+        assert bridge._resolve_vault_id("explicit-vault") == "explicit-vault"
+    finally:
+        reset_secret_scope(token)
+
+
 def test_rewrite_fails_over_ollama_nous_openrouter_then_omlx(monkeypatch):
     import urllib.error
     import urllib.request
@@ -321,29 +333,37 @@ def test_pre_llm_returns_ephemeral_context_for_eligible_message(monkeypatch):
     assert isinstance(calls[0][1]["query_variants"], list)
     assert calls[0][1]["query_variants"]
     assert result and "context" in result
-    assert "[BDH CONTEXT — optional]" in result["context"]
-    assert "Gateway recovery" in result["context"]
-    assert "Use this as supporting context." in result["context"]
+    assert "<private_background_context>" in result["context"]
+    assert "The gateway recovery used SQLite recovery." in result["context"]
+    assert "Gateway recovery" not in result["context"]
+    assert "Use this as supporting context." not in result["context"]
+    assert "Do not mention BDH" in result["context"]
 
 
-def test_context_exposes_capped_query_variants_as_retrieval_only():
+def test_context_contains_only_private_synthesis_not_retrieval_metadata():
     context = bridge._format_bdh_context({
         "activated_notes": [{"id": "n1", "title": "Gateway recovery", "score": 0.91}],
+        "response": "The gateway recovery used SQLite recovery.",
         "routing": {
-            "query_variants": [
-                {"query": "recupero gateway", "language": "it"},
-                {"query": "gateway recovery", "language": "en"},
-                {"query": "database recovery path", "language": "rewrite"},
-                {"query": "must not be shown", "language": "rewrite"},
-            ],
+            "hybrid_top_score": 0.91,
+            "query_variants": [{"query": "must not be shown", "language": "rewrite"}],
         },
     })
 
-    assert "Query variants (retrieval only):" in context
-    assert "- [it] recupero gateway" in context
-    assert "- [en] gateway recovery" in context
-    assert "- [rewrite] database recovery path" in context
+    assert "The gateway recovery used SQLite recovery." in context
+    assert "private_background_context" in context
+    assert "Activated neurons" not in context
+    assert "Gateway recovery" not in context
+    assert "0.91" not in context
+    assert "query_variants" not in context
     assert "must not be shown" not in context
+    assert "Do not mention BDH" in context
+
+
+def test_context_requires_synthesis_even_when_notes_match():
+    assert bridge._format_bdh_context({
+        "activated_notes": [{"title": "Raw note", "score": 0.99}],
+    }) == ""
 
 
 def test_hybrid_routing_requires_lexical_or_strong_vector_signal():
@@ -527,11 +547,20 @@ def test_tool_query_passes_explicit_vault(monkeypatch):
 
     def fake_query(query, **kwargs):
         captured.update(query=query, kwargs=kwargs)
-        return {"activated_notes": [], "response": "ok"}
+        return {
+            "activated_notes": [{"id": "n1", "title": "secret raw neuron", "score": 0.99}],
+            "response": "ok",
+            "new_concepts": ["must not leak"],
+            "neuron_count": 123,
+            "synapse_count": 456,
+        }
 
     monkeypatch.setattr(bridge, "_bdh_query_sync", fake_query)
     result = bridge._tool_bdh_query({"query": "research question", "vault_id": "research"})
     assert '"response": "ok"' in result
+    assert 'secret raw neuron' not in result
+    assert 'neuron_count' not in result
+    assert 'must not leak' not in result
     assert captured["kwargs"]["vault_id"] == "research"
     assert captured["kwargs"]["source"] == "user_query"
 
