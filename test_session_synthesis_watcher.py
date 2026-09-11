@@ -35,6 +35,18 @@ def test_watcher_rebuilds_conservative_pairs(tmp_path):
     ]
 
 
+def test_watcher_routes_recovered_turns_to_semantic_vault(tmp_path, monkeypatch):
+    db_path = tmp_path / "state.db"; _db(db_path)
+    watcher = TranscriptIdleWatcher(db_path=db_path, state_path=tmp_path / "idle.json")
+
+    import vault_router
+    monkeypatch.setattr(vault_router, "suggest_vault", lambda query: "crossnection")
+
+    turns = watcher.rebuild_turns("s1")
+
+    assert all(turn["vault_id"] == "crossnection" for turn in turns)
+
+
 def test_recovery_target_emits_once_after_idle(tmp_path):
     db_path = tmp_path / "state.db"; _db(db_path)
     watcher = TranscriptIdleWatcher(
