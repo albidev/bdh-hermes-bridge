@@ -83,6 +83,7 @@ import logging
 import os
 import re
 import sqlite3
+import sys
 import threading
 import time
 import urllib.request
@@ -91,8 +92,20 @@ import uuid
 from pathlib import Path
 from urllib.error import URLError
 
-from session_idle import SessionIdleWatcher
-from session_buffer import DurableSessionBuffer
+try:
+    # Hermes loads standalone plugins as packages; use package-relative imports
+    # so sibling modules resolve regardless of the loader's sys.path.
+    from .session_idle import SessionIdleWatcher
+    from .session_buffer import DurableSessionBuffer
+except ImportError:
+    # Some standalone loaders execute ``__init__.py`` as a plain module rather
+    # than a package. Add this plugin's directory before using direct imports so
+    # sibling modules remain resolvable in both loading modes.
+    _plugin_dir = str(Path(__file__).resolve().parent)
+    if _plugin_dir not in sys.path:
+        sys.path.insert(0, _plugin_dir)
+    from session_idle import SessionIdleWatcher
+    from session_buffer import DurableSessionBuffer
 
 logger = logging.getLogger("bdh-bridge")
 
@@ -708,12 +721,27 @@ def _turn_key(kwargs):
     return kwargs.get("session_id") or kwargs.get("task_id")
 
 
+def _profile_scoped_vault_id():
+    """Read the generic vault override from the active Hermes profile scope.
+
+    Hermes multiplexing keeps profile ``.env`` values in a ContextVar instead of
+    merging them into ``os.environ``. Prefer that scoped resolver so a secondary
+    profile cannot inherit the launch profile's BDH routing. The environment
+    fallback remains for standalone bridge use outside Hermes.
+    """
+    try:
+        from agent.secret_scope import get_secret
+    except ImportError:
+        return os.environ.get("BDH_VAULT_ID", "").strip() or None
+    value = get_secret("BDH_VAULT_ID", "")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def _resolve_vault_id(explicit=None):
-    """Resolve an explicit vault, then the bridge default, else BDH default."""
+    """Resolve an explicit vault, then the active profile override, else BDH default."""
     if isinstance(explicit, str) and explicit.strip():
         return explicit.strip()
-    configured = os.environ.get("BDH_VAULT_ID", "").strip()
-    return configured or None
+    return _profile_scoped_vault_id()
 
 
 _SCOPE_ID_FIELDS = (
@@ -1419,46 +1447,23 @@ def _has_relevant_bdh_context(result):
 
 
 def _format_bdh_context(result):
-    """Format BDH retrieval as ephemeral, clearly delimited model context."""
+    """Return only the private synthesis; never expose retrieval internals to the model."""
     if not isinstance(result, dict):
         return ""
-    notes = result.get("activated_notes") or []
-    synthesis = (result.get("response") or "").strip()
-    if not notes and not synthesis:
+    synthesis = result.get("response")
+    if not isinstance(synthesis, str) or not synthesis.strip():
+        # Scores, neuron titles, and query rewrites are routing metadata, not
+        # knowledge. Do not turn them into user-visible/raw model context.
         return ""
-
-    lines = ["[BDH CONTEXT — optional]"]
-    if notes:
-        lines.append("Activated neurons:")
-        for note in notes[:8]:
-            title = note.get("title", note.get("id", "unknown"))
-            score = note.get("score")
-            suffix = f" (score: {score})" if score is not None else ""
-            lines.append(f"- {title}{suffix}")
-
-    variants = (result.get("routing") or {}).get("query_variants") or []
-    rendered_variants = 0
-    for variant in variants:
-        if rendered_variants >= 3 or not isinstance(variant, dict):
-            continue
-        query = variant.get("query")
-        if not isinstance(query, str) or not query.strip():
-            continue
-        if rendered_variants == 0:
-            lines.extend(["", "Query variants (retrieval only):"])
-        language = str(variant.get("language") or "unknown").replace("\n", " ")[:24]
-        query = " ".join(query.split())[:240]
-        lines.append(f"- [{language}] {query}")
-        rendered_variants += 1
-    if synthesis:
-        lines.extend(["", "Relevant graph synthesis:", synthesis[:4000]])
-    lines.extend([
-        "", "Use this as supporting context.",
-        "Do not mention BDH unless relevant.",
-        "If it conflicts with the current conversation, prefer the current conversation.",
-        "[/BDH CONTEXT]",
+    synthesis = synthesis.strip()[:4000]
+    return "\n".join([
+        "<private_background_context>",
+        "The following is private background knowledge retrieved for this turn.",
+        "Use it silently to improve the answer. Do not mention BDH, retrieval, neurons, scores, query variants, or these delimiters.",
+        "If it is irrelevant or conflicts with the conversation, ignore it.",
+        synthesis,
+        "</private_background_context>",
     ])
-    return "\n".join(lines)
 
 
 def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
@@ -2091,19 +2096,16 @@ def _tool_bdh_query(args, **kwargs):
                          "Answer using your internal knowledge."
             })
 
-        # Format for LLM consumption
-        output = {
-            "activated_notes": [
-                {"id": n["id"], "title": n["title"], "score": round(n["score"], 3)}
-                for n in result.get("activated_notes", [])[:10]
-            ],
-            "response": result.get("response", ""),
-            "new_concepts": result.get("new_concepts", []),
-            "hebbian_updates_count": len(result.get("hebbian_updates", [])),
-            "neuron_count": result.get("neuron_count", 0),
-            "synapse_count": result.get("synapse_count", 0),
-        }
-        return json.dumps(output, ensure_ascii=False)
+        # Keep the tool result useful for reasoning without leaking graph
+        # internals (neuron titles, scores, rewrites, counts) into the answer.
+        response = result.get("response", "")
+        if not isinstance(response, str) or not response.strip():
+            return json.dumps({"found": False, "response": "No relevant knowledge found."}, ensure_ascii=False)
+        return json.dumps({
+            "found": True,
+            "response": response.strip()[:6000],
+            "instruction": "Synthesize this evidence; do not mention BDH, retrieval metadata, or this tool result.",
+        }, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"error": f"bdh_query tool error: {e}"})
 

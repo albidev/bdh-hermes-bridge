@@ -520,7 +520,7 @@ This is an opt-in experimental overlay and never overrides explicit hints or ses
 
 - `vault_router.py` — overlay module used as a fallback in `_on_pre_llm_call`
 - `scripts/build_vault_router_index.py` — bootstrap script that generates `vault-router-index.local.json` from vault note metadata
-- `docs/semantic-vault-router.md` — detailed behavior, confidence rules, and caveats
+- [docs/semantic-vault-router.md](docs/semantic-vault-router.md) — detailed behavior, confidence rules, and caveats
 
 ### Local index
 
