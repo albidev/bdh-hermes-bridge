@@ -82,6 +82,7 @@ import json
 import logging
 import os
 import re
+import socket
 import sqlite3
 import sys
 import threading
@@ -1310,6 +1311,18 @@ def _on_session_idle(**kwargs):
 # BDH HTTP helpers
 # ---------------------------------------------------------------------------
 
+def _is_timeout_error(error):
+    """Return whether *error* represents a socket/request timeout."""
+    if isinstance(error, (TimeoutError, socket.timeout)):
+        return True
+    if isinstance(error, URLError):
+        reason = error.reason
+        if isinstance(reason, (TimeoutError, socket.timeout)):
+            return True
+        return "timeout" in str(reason).lower() or "timed out" in str(reason).lower()
+    return False
+
+
 def _bdh_request(endpoint, data=None, timeout=10, retries=1, backoff_base=2.0,
                  retry_on_timeout=True):
     """HTTP request to BDH API with optional retry + exponential backoff.
@@ -1342,14 +1355,12 @@ def _bdh_request(endpoint, data=None, timeout=10, retries=1, backoff_base=2.0,
         except (URLError, OSError, json.JSONDecodeError) as e:
             last_error = e
             # Don't retry on timeout for POST requests (non-idempotent)
-            if not retry_on_timeout and isinstance(e, URLError):
-                reason = getattr(e, 'reason', '')
-                if 'timed out' in str(reason).lower() or 'timeout' in str(reason).lower():
-                    logger.warning(
-                        f"[bdh-bridge] timeout on {endpoint} (not retrying — "
-                        f"non-idempotent POST)"
-                    )
-                    return None
+            if not retry_on_timeout and _is_timeout_error(e):
+                logger.warning(
+                    f"[bdh-bridge] timeout on {endpoint} (not retrying — "
+                    f"non-idempotent POST)"
+                )
+                return None
             if attempt < retries - 1:
                 wait = backoff_base ** attempt
                 logger.warning(

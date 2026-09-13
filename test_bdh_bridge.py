@@ -452,6 +452,50 @@ def test_direct_timeout_does_not_retry_non_idempotent_request(monkeypatch):
     assert len(attempts) == 1
 
 
+def test_wrapped_timeout_does_not_retry_non_idempotent_request(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    attempts = []
+
+    def urlopen(req, timeout):
+        attempts.append((req.full_url, timeout))
+        raise urllib.error.URLError(TimeoutError("timed out"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    assert bridge._bdh_request(
+        "/api/query",
+        {"query": "non-idempotent write"},
+        timeout=30,
+        retries=2,
+        retry_on_timeout=False,
+    ) is None
+    assert len(attempts) == 1
+
+
+def test_non_timeout_error_keeps_configured_retry_count(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    attempts = []
+
+    def urlopen(req, timeout):
+        attempts.append((req.full_url, timeout))
+        raise urllib.error.URLError("connection reset")
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    assert bridge._bdh_request(
+        "/api/query",
+        {"query": "retryable failure"},
+        timeout=30,
+        retries=2,
+        retry_on_timeout=False,
+    ) is None
+    assert len(attempts) == 2
+
+
 def test_sync_query_marks_automatic_retrieval_read_only(monkeypatch):
     captured = {}
 
