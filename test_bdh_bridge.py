@@ -496,6 +496,70 @@ def test_non_timeout_error_keeps_configured_retry_count(monkeypatch):
     assert len(attempts) == 2
 
 
+def test_per_turn_write_uses_configured_timeout(monkeypatch):
+    completed = threading.Event()
+    captured = {}
+
+    monkeypatch.setattr(bridge, "_BDH_PER_TURN_TIMEOUT", 47, raising=False)
+
+    def fake_request(endpoint, payload, **kwargs):
+        captured.update(endpoint=endpoint, timeout=kwargs["timeout"])
+        return {"ok": True}
+
+    monkeypatch.setattr(bridge, "_bdh_request", fake_request)
+    bridge._bdh_query_async(
+        "turn query",
+        source="assistant_response",
+        on_complete=completed.set,
+    )
+
+    assert completed.wait(1)
+    assert captured == {"endpoint": "/api/query", "timeout": 47}
+
+
+def test_session_synthesis_keeps_independent_timeout(monkeypatch):
+    completed = threading.Event()
+    captured = {}
+
+    monkeypatch.setattr(bridge, "_SESSION_SYNTH_TIMEOUT", 123)
+
+    def fake_request(endpoint, payload, **kwargs):
+        captured.update(endpoint=endpoint, timeout=kwargs["timeout"])
+        return {"ok": True}
+
+    monkeypatch.setattr(bridge, "_bdh_request", fake_request)
+    bridge._bdh_query_async(
+        "session synthesis",
+        source="session_synthesis",
+        on_complete=completed.set,
+        wait=True,
+    )
+
+    assert completed.is_set()
+    assert captured == {"endpoint": "/api/query", "timeout": 123}
+
+
+def test_per_turn_saturation_releases_completion_without_starting_request(monkeypatch):
+    completed = threading.Event()
+    requests = []
+
+    monkeypatch.setattr(bridge, "_BDH_PER_TURN_MAX_INFLIGHT", 1, raising=False)
+    monkeypatch.setattr(bridge, "_bdh_per_turn_slots", threading.BoundedSemaphore(1))
+    monkeypatch.setattr(bridge, "_bdh_request", lambda *args, **kwargs: requests.append(1))
+    bridge._bdh_per_turn_slots.acquire()
+    try:
+        worker = bridge._bdh_query_async(
+            "saturated query",
+            source="assistant_response",
+            on_complete=completed.set,
+        )
+        assert worker is None
+        assert completed.is_set()
+        assert requests == []
+    finally:
+        bridge._bdh_per_turn_slots.release()
+
+
 def test_sync_query_marks_automatic_retrieval_read_only(monkeypatch):
     captured = {}
 
