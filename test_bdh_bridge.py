@@ -560,6 +560,28 @@ def test_per_turn_saturation_releases_completion_without_starting_request(monkey
         bridge._bdh_per_turn_slots.release()
 
 
+def test_saturated_post_write_releases_pending_barrier(monkeypatch):
+    _enable_synth(monkeypatch)
+    slots = threading.BoundedSemaphore(1)
+    slots.acquire()
+    monkeypatch.setattr(bridge, "_bdh_per_turn_slots", slots)
+    try:
+        state_kwargs = {"session_id": "saturated-session"}
+        bridge._remember_turn_state(
+            state_kwargs,
+            "Store this durable decision despite worker saturation.",
+        )
+        bridge._on_post_api_request(
+            session_id="saturated-session",
+            finish_reason="stop",
+            assistant_message=type("Message", (), {"content": "answer"})(),
+        )
+        assert "saturated-session" not in bridge._session_pending_writes
+        assert bridge._session_buffers.get("saturated-session", []) == []
+    finally:
+        slots.release()
+
+
 def test_sync_query_marks_automatic_retrieval_read_only(monkeypatch):
     captured = {}
 
