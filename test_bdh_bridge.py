@@ -431,6 +431,27 @@ def test_pre_llm_falls_back_when_bdh_is_offline(monkeypatch):
     assert result is None
 
 
+def test_direct_timeout_does_not_retry_non_idempotent_request(monkeypatch):
+    import urllib.request
+
+    attempts = []
+
+    def urlopen(req, timeout):
+        attempts.append((req.full_url, timeout))
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    assert bridge._bdh_request(
+        "/api/query",
+        {"query": "non-idempotent write"},
+        timeout=30,
+        retries=2,
+        retry_on_timeout=False,
+    ) is None
+    assert len(attempts) == 1
+
+
 def test_sync_query_marks_automatic_retrieval_read_only(monkeypatch):
     captured = {}
 
