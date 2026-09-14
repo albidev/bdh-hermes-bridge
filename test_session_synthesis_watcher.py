@@ -212,6 +212,31 @@ def test_watcher_reads_secondary_profile_databases(tmp_path, monkeypatch):
     assert default_turns and all(t["vault_id"] is None for t in default_turns)
 
 
+def test_unauthorised_session_is_skipped_not_flushed_without_a_vault(tmp_path, monkeypatch):
+    """A no-vault flush is not safe: BDH would route it to its own default.
+
+    Skipping is the only fail-closed outcome, because the gate authorises by
+    actor while a missing vault_id would let the transcript land in whatever
+    vault the server defaults to.
+    """
+    db_path = tmp_path / "state.db"
+    _db(db_path, profile_name="default")
+    monkeypatch.setenv("BDH_SYNTHESIS_POLICY_FILE", str(tmp_path / "absent.json"))
+    watcher = TranscriptIdleWatcher(db_path=db_path, state_path=tmp_path / "idle.json")
+
+    flushed = []
+    watcher.bridge = type("B", (), {
+        "_bdh_state_lock": __import__("threading").RLock(),
+        "_session_buffers": {},
+        "_flush_session_synthesis": lambda *a, **k: flushed.append((a, k)),
+    })()
+
+    watcher._on_idle("s1")
+
+    assert flushed == [], "an unauthorised session must not be flushed at all"
+    assert watcher.bridge._session_buffers == {}
+
+
 def test_recovery_target_emits_once_after_idle(tmp_path, monkeypatch):
     db_path = tmp_path / "state.db"; _db(db_path)
     monkeypatch.setenv("BDH_SYNTHESIS_POLICY_FILE", str(tmp_path / "absent.json"))
