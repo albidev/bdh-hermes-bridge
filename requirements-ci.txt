@@ -1,0 +1,11 @@
+# Runtime + test dependencies for the bridge CI.
+#
+# The bridge is stdlib-only at runtime, but its suite exercises the plugin
+# against the real Hermes core: test_bdh_bridge.py imports
+# `agent.secret_scope` from hermes-agent. Without it those tests cannot even
+# be collected, so the core is a test-only dependency here.
+#
+# hermes-agent is bounded deliberately: the suite depends on an internal core
+# module, so a new core minor must be a reviewed bump, not a surprise red gate.
+pytest>=8.0
+hermes-agent>=0.19,<0.20
