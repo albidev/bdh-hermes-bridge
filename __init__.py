@@ -1758,11 +1758,17 @@ def _on_pre_llm_call(**kwargs):
             return None
         captured_vault_id = turn_scope.get("vault_id")
 
-        # ── Semantic vault-routing overlay (experiment) ───────────────────
-        # Only activate when deterministic routing returned nothing.
-        # If the overlay cannot confidently suggest a vault, keep the
-        # existing default retrieval behavior unchanged.
-        if captured_vault_id is None:
+        # ── Semantic vault-routing overlay (retrieval only) ───────────────
+        # The overlay matches the user message text against a local concept
+        # index. That is a convenience for READING: it lets a question about a
+        # client surface that client's notes even when nothing scoped the turn.
+        # It must never become WRITE authority — a session that merely mentions
+        # a client's vocabulary would otherwise write into that client's vault.
+        # So the overlay result is used for this retrieval only and is
+        # deliberately not persisted into the turn state, which is what the
+        # write path and the session-synthesis buffer read.
+        retrieval_vault_id = captured_vault_id
+        if retrieval_vault_id is None:
             try:
                 from .vault_router import suggest_vault
             except ImportError:
@@ -1774,22 +1780,11 @@ def _on_pre_llm_call(**kwargs):
             if suggest_vault is not None:
                 overlay_vault = suggest_vault(msg)
                 if overlay_vault is not None:
-                    captured_vault_id = overlay_vault
-                    logger.info("[bdh-bridge] vault router overlay: %s", captured_vault_id)
-
-        # Persist the semantic overlay in the turn state as well as using it
-        # for retrieval. Otherwise the later write path (and session synthesis)
-        # would silently fall back to the default vault.
-        state_key = _turn_state_key(kwargs)
-        if (
-            turn_state is not None
-            and state_key is not None
-            and captured_vault_id != turn_state.get("vault_id")
-        ):
-            with _bdh_state_lock:
-                current_state = _turn_states.get(state_key)
-                if current_state is turn_state:
-                    current_state["vault_id"] = captured_vault_id
+                    retrieval_vault_id = overlay_vault
+                    logger.info(
+                        "[bdh-bridge] vault router overlay (retrieval only): %s",
+                        retrieval_vault_id,
+                    )
         # ──────────────────────────────────────────────────────────────────
 
         if _is_cron_source(kwargs.get("platform"), kwargs.get("source")) and not _cron_has_bdh_opt_in(msg):
@@ -1881,7 +1876,7 @@ def _on_pre_llm_call(**kwargs):
             timeout=2,
             learn=False,
             retries=1,
-            vault_id=captured_vault_id,
+            vault_id=retrieval_vault_id,
             query_variants=bdh_query_variants,
         )
         context = _format_bdh_context(result) if _has_relevant_bdh_context(result) else ""

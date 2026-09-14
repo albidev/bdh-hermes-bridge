@@ -15,6 +15,10 @@ from pathlib import Path
 from typing import Any
 
 from session_idle import SessionIdleWatcher
+from synthesis_scope import load_policy, resolve_synthesis_vault
+
+# Session sources served by a Hermes profile rather than by a user terminal.
+_PROFILE_SERVED_SOURCES = ("tui", "mission-control", "bot_room")
 
 
 class TranscriptIdleWatcher:
@@ -29,6 +33,10 @@ class TranscriptIdleWatcher:
         self.db_path = Path(db_path)
         self.recover_session_id = recover_session_id
         self._recovery_seeded = False
+        # Profile-scoped databases of the same Hermes home. A session served by
+        # a secondary profile is stored in that profile's own state.db, so a
+        # watcher pinned to the default database would never see it.
+        self.extra_db_paths = self._discover_profile_dbs(self.db_path)
         self.bridge = None
         self.idle = SessionIdleWatcher(
             state_path,
@@ -36,21 +44,47 @@ class TranscriptIdleWatcher:
             on_idle=self._on_idle,
         )
 
-    def _db(self):
+    @staticmethod
+    def _discover_profile_dbs(db_path: Path) -> list[Path]:
+        profiles_root = db_path.parent / "profiles"
+        if not profiles_root.is_dir():
+            return []
+        found: list[Path] = []
+        for entry in sorted(profiles_root.iterdir()):
+            candidate = entry / "state.db"
+            try:
+                if candidate.is_file() and candidate != db_path:
+                    found.append(candidate)
+            except OSError:
+                continue
+        return found
+
+    def all_db_paths(self) -> list[Path]:
+        return [self.db_path, *self.extra_db_paths]
+
+    def _db(self, db_path: Path | None = None):
+        target = db_path or self.db_path
         return sqlite3.connect(
-            f"file:{self.db_path}?mode=ro", uri=True, timeout=1.0,
+            f"file:{target}?mode=ro", uri=True, timeout=1.0,
         )
 
     def session_activity(self) -> dict[str, float | None]:
-        try:
-            with self._db() as db:
-                rows = db.execute(
-                    "SELECT id, last_activity_at FROM sessions "
-                    "WHERE ended_at IS NULL AND source IN ('tui', 'mission-control')"
-                ).fetchall()
-            return {str(session_id): activity for session_id, activity in rows}
-        except sqlite3.Error:
-            return {}
+        activity: dict[str, float | None] = {}
+        for db_path in self.all_db_paths():
+            try:
+                with self._db(db_path) as db:
+                    rows = db.execute(
+                        "SELECT id, last_activity_at FROM sessions "
+                        "WHERE ended_at IS NULL AND source IN "
+                        f"({','.join('?' * len(_PROFILE_SERVED_SOURCES))})",
+                        _PROFILE_SERVED_SOURCES,
+                    ).fetchall()
+            except sqlite3.Error:
+                continue
+            for session_id, last_activity in rows:
+                activity[str(session_id)] = last_activity
+        return activity
+
 
     @staticmethod
     def _text(value: Any) -> str:
@@ -64,20 +98,51 @@ class TranscriptIdleWatcher:
         return str(value or "").strip()
 
     @staticmethod
-    def _resolve_recovered_vault(turns: list[dict[str, Any]]) -> str | None:
-        query = "\n".join(str(turn.get("user") or "") for turn in turns).strip()
-        if not query:
-            return None
-        try:
-            from vault_router import suggest_vault
-            return suggest_vault(query)
-        except (ImportError, OSError, ValueError, TypeError):
-            return None
+    def _locate_session(session_id: str, db_paths: list[Path]) -> tuple[Path | None, str | None]:
+        """Return (db_path, serving profile_name) for a session, if known."""
+        for db_path in db_paths:
+            try:
+                with sqlite3.connect(
+                    f"file:{db_path}?mode=ro", uri=True, timeout=1.0,
+                ) as db:
+                    row = db.execute(
+                        "SELECT profile_name FROM sessions WHERE id = ?",
+                        (session_id,),
+                    ).fetchone()
+            except sqlite3.Error:
+                continue
+            if row is not None:
+                return db_path, (str(row[0]).strip() if row[0] else None)
+        return None, None
+
+    @classmethod
+    def _resolve_recovery_vault(
+        cls,
+        turns: list[dict[str, Any]],
+        *,
+        session_id: str | None = None,
+        db_paths: list[Path] | None = None,
+    ) -> str | None:
+        """Authorise a synthesis vault from the serving profile, never the topic.
+
+        The transcript text is deliberately ignored: a session that merely
+        mentions a client's vocabulary must not be written into that client's
+        vault. Authorisation comes from who served the session.
+        """
+        profile_name = None
+        if session_id and db_paths:
+            _, profile_name = cls._locate_session(session_id, db_paths)
+        return resolve_synthesis_vault(
+            session_profile=profile_name,
+            policy=load_policy(),
+        )
 
     def rebuild_turns(self, session_id: str) -> list[dict[str, Any]]:
         """Reconstruct conservative pairs; tool/system rows are never buffered."""
+        db_path, _ = self._locate_session(session_id, self.all_db_paths())
+        target_db = db_path or self.db_path
         try:
-            with self._db() as db:
+            with self._db(target_db) as db:
                 rows = db.execute(
                     "SELECT role, content, finish_reason FROM messages "
                     "WHERE session_id = ? AND active = 1 "
@@ -100,11 +165,14 @@ class TranscriptIdleWatcher:
                         "context_only": True,
                     })
                 pending_user = None
-        vault_id = self._resolve_recovered_vault(turns)
+        vault_id = self._resolve_recovery_vault(
+            turns, session_id=session_id, db_paths=self.all_db_paths(),
+        )
         if vault_id:
             for turn in turns:
                 turn["vault_id"] = vault_id
         return turns[-200:]
+
 
     def _on_idle(self, session_id: str) -> None:
         turns = self.rebuild_turns(session_id)
