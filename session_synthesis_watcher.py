@@ -8,6 +8,7 @@ user/assistant pairs, and invokes the bridge's existing Curate-gated flush.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sqlite3
 import time
@@ -16,6 +17,8 @@ from typing import Any
 
 from session_idle import SessionIdleWatcher
 from synthesis_scope import load_policy, resolve_synthesis_vault
+
+logger = logging.getLogger(__name__)
 
 # Session sources served by a Hermes profile rather than by a user terminal.
 _PROFILE_SERVED_SOURCES = ("tui", "mission-control", "bot_room")
@@ -177,6 +180,15 @@ class TranscriptIdleWatcher:
     def _on_idle(self, session_id: str) -> None:
         turns = self.rebuild_turns(session_id)
         if len(turns) < 3:
+            return
+        # The actor gate is fail-closed: an unauthorised session is skipped, not
+        # flushed with no vault. A no-vault flush would be routed by BDH to its
+        # configured default, which would let un-authorised transcripts land in
+        # a vault — the leak this gate exists to stop.
+        if not turns[0].get("vault_id"):
+            logger.info(
+                "[synthesis-scope] session %s skipped — no authorised vault", session_id
+            )
             return
         if self.bridge is None:
             import importlib
