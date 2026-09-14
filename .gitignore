@@ -2,3 +2,5 @@ __pycache__/
 prompt_blacklist.txt
 .worktrees/
 vault-router-index.local.json
+synthesis-policy.local.json
+synthesis-policy-*.json
