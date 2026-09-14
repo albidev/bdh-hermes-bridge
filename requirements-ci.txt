@@ -7,5 +7,5 @@
 #
 # hermes-agent is bounded deliberately: the suite depends on an internal core
 # module, so a new core minor must be a reviewed bump, not a surprise red gate.
-pytest>=8.0
+pytest>=9.1.1
 hermes-agent>=0.19,<0.20
