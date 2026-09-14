@@ -38,7 +38,7 @@ def _db(path, session_id="s1", last_activity=1000.0, source="tui", profile_name=
 # ---------------------------------------------------------------------------
 
 POLICY = SynthesisPolicy(
-    profile_vaults={"crossnection": "crossnection"},
+    profile_vaults={"client-a": "vault-a"},
     allow_room_registry=True,
     room_registry_path="unused.json",
 )
@@ -55,15 +55,15 @@ def test_default_profile_topic_is_never_routed_to_the_client_vault():
 
 def test_serving_profile_authorises_its_vault():
     assert resolve_synthesis_vault(
-        session_profile="crossnection",
+        session_profile="client-a",
         policy=POLICY,
         registry={},
-    ) == "crossnection"
+    ) == "vault-a"
     assert resolve_synthesis_vault(
-        session_profile="crossnection-reviewer",
+        session_profile="client-a-reviewer",
         policy=POLICY,
         registry={},
-    ) == "crossnection"
+    ) == "vault-a"
 
 
 def test_unlisted_profile_is_not_authorised():
@@ -80,7 +80,7 @@ def test_missing_policy_means_no_synthesis(tmp_path, monkeypatch):
 
 
 def test_mixed_room_is_not_a_client_scope():
-    members = [{"profile": "default"}, {"profile": "crossnection"}]
+    members = [{"profile": "default"}, {"profile": "client-a"}]
     assert resolve_synthesis_vault(
         session_profile=None,
         room_id="r1",
@@ -91,41 +91,41 @@ def test_mixed_room_is_not_a_client_scope():
 
 
 def test_unanimous_room_members_authorise_the_vault():
-    members = [{"profile": "crossnection"}, {"profile": "crossnection-triage"}]
+    members = [{"profile": "client-a"}, {"profile": "client-a-triage"}]
     assert resolve_synthesis_vault(
         session_profile=None,
         room_id="r1",
         room_members=members,
         policy=POLICY,
         registry={},
-    ) == "crossnection"
+    ) == "vault-a"
 
 
 def test_registry_entry_is_used_when_the_serving_profile_is_unauthorised():
-    members = [{"profile": "crossnection"}]
+    members = [{"profile": "client-a"}]
     assert resolve_synthesis_vault(
         session_profile="default",
         room_id="r1",
         room_members=members,
         policy=POLICY,
-        registry={"r1": "crossnection"},
-    ) == "crossnection"
+        registry={"r1": "vault-a"},
+    ) == "vault-a"
 
 
 def test_registry_cannot_override_a_contradicting_member_profile():
-    members = [{"profile": "default"}, {"profile": "crossnection"}]
+    members = [{"profile": "default"}, {"profile": "client-a"}]
     assert resolve_synthesis_vault(
         session_profile="default",
         room_id="r1",
         room_members=members,
         policy=POLICY,
-        registry={"r1": "crossnection"},
+        registry={"r1": "vault-a"},
     ) is None
 
 
 def test_registry_is_ignored_when_the_policy_disables_it():
     policy = SynthesisPolicy(
-        profile_vaults={"crossnection": "crossnection"},
+        profile_vaults={"client-a": "vault-a"},
         allow_room_registry=False,
         room_registry_path="",
     )
@@ -134,7 +134,7 @@ def test_registry_is_ignored_when_the_policy_disables_it():
         room_id="r1",
         room_members=[],
         policy=policy,
-        registry={"r1": "crossnection"},
+        registry={"r1": "vault-a"},
     ) is None
 
 
@@ -155,10 +155,10 @@ def test_watcher_rebuilds_conservative_pairs(tmp_path, monkeypatch):
 
 def test_watcher_uses_the_serving_profile_not_the_transcript(tmp_path, monkeypatch):
     db_path = tmp_path / "state.db"
-    _db(db_path, profile_name="crossnection")
+    _db(db_path, profile_name="client-a")
     policy_file = tmp_path / "policy.json"
     policy_file.write_text(
-        '{"version": 1, "profile_vaults": {"crossnection": "crossnection"},'
+        '{"version": 1, "profile_vaults": {"client-a": "vault-a"},'
         ' "allow_room_registry": false}',
         encoding="utf-8",
     )
@@ -167,7 +167,7 @@ def test_watcher_uses_the_serving_profile_not_the_transcript(tmp_path, monkeypat
 
     turns = watcher.rebuild_turns("s1")
 
-    assert all(turn["vault_id"] == "crossnection" for turn in turns)
+    assert all(turn["vault_id"] == "vault-a" for turn in turns)
 
 
 def test_watcher_skips_a_default_profile_session_mentioning_a_client(tmp_path, monkeypatch):
@@ -175,7 +175,7 @@ def test_watcher_skips_a_default_profile_session_mentioning_a_client(tmp_path, m
     _db(db_path, profile_name="default")
     policy_file = tmp_path / "policy.json"
     policy_file.write_text(
-        '{"version": 1, "profile_vaults": {"crossnection": "crossnection"},'
+        '{"version": 1, "profile_vaults": {"client-a": "vault-a"},'
         ' "allow_room_registry": false}',
         encoding="utf-8",
     )
@@ -189,16 +189,16 @@ def test_watcher_skips_a_default_profile_session_mentioning_a_client(tmp_path, m
 
 def test_watcher_reads_secondary_profile_databases(tmp_path, monkeypatch):
     home = tmp_path / ".hermes"
-    (home / "profiles" / "crossnection").mkdir(parents=True)
+    (home / "profiles" / "vault-a").mkdir(parents=True)
     _db(home / "state.db", session_id="default-sess", profile_name="default")
     _db(
-        home / "profiles" / "crossnection" / "state.db",
+        home / "profiles" / "vault-a" / "state.db",
         session_id="client-sess",
-        profile_name="crossnection",
+        profile_name="client-a",
     )
     policy_file = tmp_path / "policy.json"
     policy_file.write_text(
-        '{"version": 1, "profile_vaults": {"crossnection": "crossnection"},'
+        '{"version": 1, "profile_vaults": {"client-a": "vault-a"},'
         ' "allow_room_registry": false}',
         encoding="utf-8",
     )
@@ -207,7 +207,7 @@ def test_watcher_reads_secondary_profile_databases(tmp_path, monkeypatch):
 
     assert set(watcher.session_activity()) == {"default-sess", "client-sess"}
     client_turns = watcher.rebuild_turns("client-sess")
-    assert client_turns and all(t["vault_id"] == "crossnection" for t in client_turns)
+    assert client_turns and all(t["vault_id"] == "vault-a" for t in client_turns)
     default_turns = watcher.rebuild_turns("default-sess")
     assert default_turns and all(t["vault_id"] is None for t in default_turns)
 
