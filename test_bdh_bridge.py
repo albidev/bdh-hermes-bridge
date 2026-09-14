@@ -542,6 +542,67 @@ def test_post_api_write_keeps_captured_vault_after_env_changes(monkeypatch):
     assert writes[0]["vault_id"] == "client-a"
 
 
+def test_semantic_overlay_never_becomes_write_authority(monkeypatch):
+    """A mention of a client's vocabulary must not scope the turn's write path.
+
+    The overlay is a retrieval convenience only: it selects which vault to READ
+    from. Persisting it into turn state would let topic text authorise a WRITE
+    into that client's vault — the cross-vault contamination this guards.
+    """
+    writes = []
+    monkeypatch.delenv("BDH_VAULT_ID", raising=False)
+    monkeypatch.setattr(bridge, "_QUERY_REWRITE_ENABLED", False)
+    monkeypatch.setattr(
+        bridge, "_bdh_query_sync", lambda *a, **k: {"activated_notes": [], "response": ""}
+    )
+    monkeypatch.setattr(
+        bridge, "_bdh_query_async", lambda *a, **k: writes.append(k)
+    )
+
+    # The message names a client, so the semantic overlay has a candidate vault.
+    import vault_router
+    monkeypatch.setattr(vault_router, "suggest_vault", lambda query: "client-a")
+
+    kwargs = {"session_id": "overlay-session", "user_message": "How does the client term valve automation work?"}
+    bridge._on_pre_llm_call(**kwargs)
+
+    state = bridge._turn_states.get(bridge._turn_state_key(kwargs))
+    assert state is not None
+    assert state["vault_id"] is None, "overlay leaked into the write-path scope"
+
+    bridge._on_post_api_request(
+        session_id="overlay-session",
+        finish_reason="stop",
+        assistant_message=type("Message", (), {"content": "answer"})(),
+    )
+    assert writes, "the turn still writes to the configured default vault"
+    assert writes[0]["vault_id"] is None, (
+        "an unauthorised turn must fall back to the default vault, "
+        "never to the client vault named in the message"
+    )
+
+
+def test_retrieval_overlay_still_reads_the_suggested_vault(monkeypatch):
+    """The overlay keeps its retrieval value even though it scopes no write."""
+    reads = []
+    monkeypatch.delenv("BDH_VAULT_ID", raising=False)
+    monkeypatch.setattr(bridge, "_QUERY_REWRITE_ENABLED", False)
+    monkeypatch.setattr(
+        bridge,
+        "_bdh_query_sync",
+        lambda *a, **k: reads.append(k) or {"activated_notes": [], "response": ""},
+    )
+    import vault_router
+    monkeypatch.setattr(vault_router, "suggest_vault", lambda query: "client-a")
+
+    bridge._on_pre_llm_call(
+        session_id="overlay-read-session",
+        user_message="How does the client term valve automation work?",
+    )
+
+    assert reads[0]["vault_id"] == "client-a"
+
+
 def test_tool_query_passes_explicit_vault(monkeypatch):
     captured = {}
 
