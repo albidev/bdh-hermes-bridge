@@ -11,14 +11,25 @@ when the session was served by an unrelated profile and contained no client
 work at all.
 
 Topic is not authority. The actor is. This module authorises a synthesis
-target from **who served the session / who is in the room**, never from what
-the text talks about:
+target from explicit actor signals only:
 
-1. an explicit room registry entry (``room_vaults.json``), provided no member
+1. an **addressed actor** — a bot mentioned by handle in a user message
+   (``@somebot``). This is the most explicit signal available: it says who was
+   asked to do the work, which is independent of which profile happened to
+   serve the run;
+2. an explicit room registry entry (``room_vaults.json``), provided no member
    profile contradicts it;
-2. the serving profile name, matched against configured profile prefixes;
-3. the room's non-default member profiles, when they agree on one vault;
-4. otherwise -> ``None``: no synthesis. There is deliberately no fallback.
+3. the serving profile name, matched against configured profile prefixes;
+4. the room's non-default member profiles, when they agree on one vault;
+5. otherwise -> ``None``: no synthesis. There is deliberately no fallback.
+
+Signals 2-4 describe *who ran the session*. Signal 1 describes *who was
+addressed*, and is what catches a session whose runner profile is unrelated to
+the work (e.g. a client task run from a default profile).
+
+Only ``@handle`` tokens are read from message text — never the surrounding
+prose. The handle pattern and the handle -> vault mapping are configuration:
+this module ships the mechanism, an operator supplies the names.
 
 The policy file is local and gitignored; mappings are operator config, not
 repository content. Absent or invalid policy means "synthesize nothing",
@@ -30,6 +41,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -44,22 +56,35 @@ ROOM_REGISTRY_ENV = "BDH_ROOM_VAULT_REGISTRY"
 # member-profile rule still applies, but only for profiles the operator listed.
 _DEFAULT_PROFILE_NAMES = frozenset({"", "default", "none"})
 
+# An addressed actor: ``@handle`` where handle is a bot/profile identifier.
+# Deliberately narrow — it matches handles only, never free text.
+_MENTION_RE = re.compile(r"@([A-Za-z0-9][A-Za-z0-9_.-]{0,63})")
+
 
 @dataclass(frozen=True)
 class SynthesisPolicy:
-    """Authorised profile-prefix -> vault mappings plus room-registry opt-in."""
+    """Authorised actor -> vault mappings plus room-registry opt-in.
+
+    ``mention_prefixes`` map an addressed handle (or handle prefix) to a vault;
+    ``profile_vaults`` map a serving profile name (or prefix) to a vault.
+    """
 
     version: int = 1
     profile_vaults: Mapping[str, str] = field(default_factory=dict)
+    mention_prefixes: Mapping[str, str] = field(default_factory=dict)
     allow_room_registry: bool = True
     room_registry_path: str = ""
 
     @property
     def configured(self) -> bool:
-        return bool(self.profile_vaults) or (self.allow_room_registry and bool(self.room_registry_path))
+        return bool(
+            self.profile_vaults
+            or self.mention_prefixes
+            or (self.allow_room_registry and self.room_registry_path)
+        )
 
 
-_DISABLED = SynthesisPolicy(profile_vaults={}, allow_room_registry=False)
+_DISABLED = SynthesisPolicy(profile_vaults={}, mention_prefixes={}, allow_room_registry=False)
 
 
 def _policy_path() -> Path:
@@ -81,6 +106,22 @@ def _registry_path(policy: SynthesisPolicy) -> Path | None:
     return Path(raw).expanduser()
 
 
+def _normalise_prefix_map(raw: Any, field_name: str) -> dict[str, str]:
+    """Validate a prefix -> vault mapping; invalid input degrades to empty."""
+    if not isinstance(raw, Mapping):
+        if raw is not None:
+            logger.warning("[synthesis-scope] %s must be an object — ignored", field_name)
+        return {}
+    result: dict[str, str] = {}
+    for prefix, vault in raw.items():
+        prefix_text = str(prefix or "").strip().casefold()
+        vault_text = str(vault or "").strip()
+        if not prefix_text or not vault_text:
+            continue
+        result[prefix_text] = vault_text
+    return result
+
+
 def load_policy() -> SynthesisPolicy:
     """Load the local synthesis policy; disabled unless explicitly valid."""
     path = _policy_path()
@@ -96,25 +137,14 @@ def load_policy() -> SynthesisPolicy:
         logger.warning("[synthesis-scope] policy must be a JSON object — synthesis disabled")
         return _DISABLED
 
-    raw_map = data.get("profile_vaults") or {}
-    if not isinstance(raw_map, dict):
-        logger.warning("[synthesis-scope] profile_vaults must be an object — ignored")
-        raw_map = {}
-
-    profile_vaults: dict[str, str] = {}
-    for prefix, vault in raw_map.items():
-        prefix_text = str(prefix or "").strip().casefold()
-        vault_text = str(vault or "").strip()
-        if not prefix_text or not vault_text:
-            continue
-        profile_vaults[prefix_text] = vault_text
-
     return SynthesisPolicy(
         version=int(data.get("version") or 1),
-        profile_vaults=profile_vaults,
+        profile_vaults=_normalise_prefix_map(data.get("profile_vaults"), "profile_vaults"),
+        mention_prefixes=_normalise_prefix_map(data.get("mention_prefixes"), "mention_prefixes"),
         allow_room_registry=bool(data.get("allow_room_registry", True)),
         room_registry_path=str(data.get("room_registry_path") or "").strip(),
     )
+
 
 
 def load_room_registry(policy: SynthesisPolicy) -> dict[str, str]:
@@ -148,6 +178,51 @@ def vault_for_profile(profile_name: Any, policy: SynthesisPolicy) -> str | None:
     return None
 
 
+def extract_mentions(*texts: Any) -> list[str]:
+    """Return the ``@handle`` tokens addressed in *texts*, casefolded, unique.
+
+    Only handle tokens are read. Prose is never inspected, so this cannot
+    regress into the textual routing the actor gate replaced.
+    """
+    seen: list[str] = []
+    for text in texts:
+        if not isinstance(text, str) or not text:
+            continue
+        for handle in _MENTION_RE.findall(text):
+            folded = handle.casefold()
+            if folded not in seen:
+                seen.append(folded)
+    return seen
+
+
+def vault_for_mentions(mentions: Iterable[Any], policy: SynthesisPolicy) -> str | None:
+    """Map addressed handles to a vault by configured prefix.
+
+    Returns ``None`` when nothing matches, and also when the addressed handles
+    disagree on a vault: an ambiguous address is not an authorisation, and
+    guessing between two customers is exactly the mistake this gate exists to
+    prevent.
+    """
+    matched: set[str] = set()
+    for raw in mentions or ():
+        handle = str(raw or "").strip().casefold().lstrip("@")
+        if not handle:
+            continue
+        for prefix, vault in policy.mention_prefixes.items():
+            if handle == prefix or handle.startswith(f"{prefix}-"):
+                matched.add(vault)
+                break
+    if len(matched) == 1:
+        return next(iter(matched))
+    if len(matched) > 1:
+        logger.warning(
+            "[synthesis-scope] addressed actors disagree on a vault (%s) — skipped",
+            sorted(matched),
+        )
+    return None
+
+
+
 def _member_profiles(members: Sequence[Any] | None) -> list[str]:
     profiles: list[str] = []
     for member in members or ():
@@ -164,6 +239,7 @@ def _member_profiles(members: Sequence[Any] | None) -> list[str]:
 def resolve_synthesis_vault(
     *,
     session_profile: Any = None,
+    session_mentions: Iterable[Any] | None = None,
     room_id: Any = None,
     room_members: Sequence[Any] | None = None,
     policy: SynthesisPolicy | None = None,
@@ -173,6 +249,11 @@ def resolve_synthesis_vault(
 
     ``None`` means "do not synthesize". Callers must never substitute a
     semantic/textual guess for a missing authorisation.
+
+    Precedence is by how explicit the actor signal is. An addressed actor wins
+    over the serving profile: being *asked* is a stronger statement about the
+    work than being the runner, and it is what routes a client task run from an
+    unrelated profile to the right vault.
     """
     active = policy if policy is not None else load_policy()
     if not active.configured:
@@ -195,6 +276,17 @@ def resolve_synthesis_vault(
     room_key = str(room_id or "").strip()
     if room_key and room_key in rooms and not mixed_room:
         registry_vault = rooms[room_key]
+        # An addressed actor outranks the room's registry entry, but a
+        # contradiction is never silently resolved in either direction.
+        addressed = vault_for_mentions(session_mentions or (), active)
+        if addressed is not None:
+            if addressed == registry_vault:
+                return addressed
+            logger.warning(
+                "[synthesis-scope] room %s addressed actor -> %s contradicts registry=%s — skipped",
+                room_key, addressed, registry_vault,
+            )
+            return None
         # The serving profile wins when it is itself authorised, so a single
         # profile's work is never labelled with another vault's identity.
         serving = vault_for_profile(session_profile, active)
@@ -217,6 +309,12 @@ def resolve_synthesis_vault(
             return None
         return registry_vault
 
+    # An addressed actor is the strongest signal: it names who was asked to do
+    # the work, independently of the profile that served the run.
+    addressed = vault_for_mentions(session_mentions or (), active)
+    if addressed is not None:
+        return addressed
+
     serving = vault_for_profile(session_profile, active)
     if serving is not None:
         return serving
@@ -225,6 +323,7 @@ def resolve_synthesis_vault(
         return next(iter(member_vaults))
 
     return None
+
 
 
 def _has_default_member(members: Sequence[Any] | None) -> bool:
