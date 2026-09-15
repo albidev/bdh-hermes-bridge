@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>ai.bdh.session-synthesis-watcher</string>
+  <string>ai.bdh.room-synthesis-watcher</string>
   <key>ProgramArguments</key>
   <array>
     <string>__PYTHON__</string>
-    <string>__REPO__/session_synthesis_watcher.py</string>
+    <string>__REPO__/room_synthesis_watcher.py</string>
     <string>--interval</string>
     <string>60</string>
   </array>
@@ -21,12 +21,13 @@
     <string>__REPO__</string>
     <key>BDH_API_URL</key>
     <string>http://127.0.0.1:8643</string>
-    <key>BDH_SESSION_SYNTH_ENABLED</key>
-    <string>true</string>
     <!-- Authorises synthesis vaults by actor. Local and gitignored; see
          synthesis_scope.py. Without it the watcher synthesizes nothing. -->
     <key>BDH_SYNTHESIS_POLICY_FILE</key>
     <string>__REPO__/synthesis-policy.local.json</string>
+    <!-- Room -> vault registry written by Mission Control when a room is created. -->
+    <key>BDH_ROOM_VAULT_REGISTRY</key>
+    <string>__ROOM_REGISTRY__</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>
@@ -35,8 +36,8 @@
   <key>ProcessType</key>
   <string>Background</string>
   <key>StandardOutPath</key>
-  <string>__HERMES_HOME__/logs/bdh-session-synthesis-watcher.log</string>
+  <string>__HERMES_HOME__/logs/bdh-room-synthesis-watcher.log</string>
   <key>StandardErrorPath</key>
-  <string>__HERMES_HOME__/logs/bdh-session-synthesis-watcher.error.log</string>
+  <string>__HERMES_HOME__/logs/bdh-room-synthesis-watcher.error.log</string>
 </dict>
 </plist>
