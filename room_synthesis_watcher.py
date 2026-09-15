@@ -43,6 +43,7 @@ import threading
 import time
 import urllib.request
 import uuid
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -133,6 +134,13 @@ class RoomSynthesisWatcher:
     # -- activity / turn reconstruction ------------------------------------
 
     def _db(self) -> sqlite3.Connection:
+        """Open a read-only connection.
+
+        Callers must CLOSE it: `with sqlite3.connect(...)` is a transaction
+        context manager and leaves the connection open, so descriptors
+        accumulate until the cyclic collector runs. Use
+        `contextlib.closing(self._db())` for every read.
+        """
         return sqlite3.connect(
             f"file:{self.db_path}?mode=ro", uri=True, timeout=1.0,
         )
@@ -140,7 +148,7 @@ class RoomSynthesisWatcher:
     def room_activity(self) -> dict[str, float | None]:
         """Map room_id -> last event time for ACTIVE (non-disbanded) rooms."""
         try:
-            with self._db() as db:
+            with closing(self._db()) as db:
                 rows = db.execute(
                     "SELECT h.room_id, "
                     "       COALESCE((SELECT MAX(e.created_at) FROM hosted_room_events e "
@@ -154,7 +162,7 @@ class RoomSynthesisWatcher:
 
     def room_members(self, room_id: str) -> list[dict[str, str]]:
         try:
-            with self._db() as db:
+            with closing(self._db()) as db:
                 row = db.execute(
                     "SELECT members_json FROM hosted_rooms WHERE room_id = ?",
                     (room_id,),
@@ -207,7 +215,7 @@ class RoomSynthesisWatcher:
         message appended as the assistant part.
         """
         try:
-            with self._db() as db:
+            with closing(self._db()) as db:
                 rows = db.execute(
                     "SELECT kind, actor_json, payload_json, created_at "
                     "FROM hosted_room_events "
@@ -328,12 +336,24 @@ class RoomSynthesisWatcher:
             time.sleep(max(1.0, interval_seconds))
 
 
+def _default_bdh_url() -> str:
+    """The BDH endpoint, honouring BDH_API_URL like the rest of the bridge.
+
+    The launchd plist sets BDH_API_URL, and the session watcher resolves it
+    through the bridge package — this watcher read only the CLI flag, so the
+    environment variable was dead config and a test that pointed BDH_API_URL at
+    a stub would still POST to the real server.
+    """
+    return os.environ.get("BDH_API_URL", "").strip() or DEFAULT_BDH_URL
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Room idle synthesis watcher")
     parser.add_argument("--db-path", default="")
     parser.add_argument("--state-path", default="")
     parser.add_argument("--registry", default=DEFAULT_REGISTRY)
-    parser.add_argument("--bdh-url", default=DEFAULT_BDH_URL)
+    parser.add_argument("--bdh-url", default=_default_bdh_url())
+
     parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
     parser.add_argument("--min-turns", type=int, default=DEFAULT_MIN_TURNS)
     parser.add_argument("--max-chars", type=int, default=DEFAULT_MAX_CHARS)
