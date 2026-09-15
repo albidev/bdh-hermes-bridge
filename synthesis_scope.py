@@ -315,10 +315,18 @@ def resolve_synthesis_vault(
     if addressed is not None:
         return addressed
 
-    serving = vault_for_profile(session_profile, active)
-    if serving is not None:
-        return serving
-
+    # No serving-profile fallback here, and that is the point of this function's
+    # actor model. A profile name says which agent RAN the turn, not what the
+    # work belongs to: a chat opened in a client profile to work on Hermes/BDH
+    # is served by that profile and would be filed into the client vault on
+    # every idle pass, with no residual signal distinguishing it from real
+    # client work. Profile identity stays authoritative in the room branch
+    # above, where it is corroborated by the registry entry and the full
+    # membership; on its own it is not an authorisation.
+    #
+    # A 1:1 session therefore needs an addressed actor. Without one it is
+    # unscoped: losing a synthesis is recoverable, contaminating a client vault
+    # is not.
     if len(member_vaults) == 1 and not mixed_room:
         return next(iter(member_vaults))
 
