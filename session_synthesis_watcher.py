@@ -12,6 +12,7 @@ import logging
 import os
 import sqlite3
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
@@ -70,6 +71,16 @@ class TranscriptIdleWatcher:
         return [self.db_path, *self.extra_db_paths]
 
     def _db(self, db_path: Path | None = None):
+        """Open a read-only connection.
+
+        Callers must CLOSE it. `with sqlite3.connect(...)` is a transaction
+        context manager: it does not close the connection, and SQLite
+        connections form reference cycles, so they are only reclaimed when the
+        cyclic collector happens to run. A long-lived watcher therefore
+        accumulates descriptors between collections — measured at 141-221 held
+        against launchd's 256 maxfiles limit. Use `contextlib.closing(self._db())`
+        (or an explicit close() in a finally) for every read.
+        """
         target = db_path or self.db_path
         return sqlite3.connect(
             f"file:{target}?mode=ro", uri=True, timeout=1.0,
@@ -78,8 +89,9 @@ class TranscriptIdleWatcher:
     def session_activity(self) -> dict[str, float | None]:
         activity: dict[str, float | None] = {}
         for db_path in self.all_db_paths():
+            rows: list[Any] = []
             try:
-                with self._db(db_path) as db:
+                with closing(self._db(db_path)) as db:
                     rows = db.execute(
                         "SELECT id, last_activity_at FROM sessions "
                         "WHERE ended_at IS NULL AND source IN "
@@ -109,9 +121,9 @@ class TranscriptIdleWatcher:
         """Return (db_path, serving profile_name) for a session, if known."""
         for db_path in db_paths:
             try:
-                with sqlite3.connect(
+                with closing(sqlite3.connect(
                     f"file:{db_path}?mode=ro", uri=True, timeout=1.0,
-                ) as db:
+                )) as db:
                     row = db.execute(
                         "SELECT profile_name FROM sessions WHERE id = ?",
                         (session_id,),
@@ -157,7 +169,7 @@ class TranscriptIdleWatcher:
         db_path, _ = self._locate_session(session_id, self.all_db_paths())
         target_db = db_path or self.db_path
         try:
-            with self._db(target_db) as db:
+            with closing(self._db(target_db)) as db:
                 rows = db.execute(
                     "SELECT role, content, finish_reason FROM messages "
                     "WHERE session_id = ? AND active = 1 "
