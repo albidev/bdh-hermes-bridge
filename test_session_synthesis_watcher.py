@@ -7,7 +7,8 @@ from session_synthesis_watcher import TranscriptIdleWatcher
 from synthesis_scope import SynthesisPolicy, resolve_synthesis_vault
 
 
-def _db(path, session_id="s1", last_activity=1000.0, source="tui", profile_name=None):
+def _db(path, session_id="s1", last_activity=1000.0, source="tui", profile_name=None,
+        user_text="decision"):
     db = sqlite3.connect(path)
     db.executescript("""
         create table sessions (id text primary key, source text, profile_name text,
@@ -20,11 +21,11 @@ def _db(path, session_id="s1", last_activity=1000.0, source="tui", profile_name=
         (session_id, source, profile_name, last_activity),
     )
     rows = [
-        (session_id, "user", "decision one", "stop", 1),
+        (session_id, "user", f"{user_text} one", "stop", 1),
         (session_id, "assistant", "answer one", "stop", 1),
-        (session_id, "user", "decision two", "stop", 1),
+        (session_id, "user", f"{user_text} two", "stop", 1),
         (session_id, "assistant", "answer two", "stop", 1),
-        (session_id, "user", "decision three", "stop", 1),
+        (session_id, "user", f"{user_text} three", "stop", 1),
         (session_id, "assistant", "answer three", "stop", 1),
     ]
     db.executemany(
@@ -55,16 +56,55 @@ def test_default_profile_topic_is_never_routed_to_the_client_vault():
     ) is None
 
 
-def test_serving_profile_authorises_its_vault():
+def test_serving_profile_does_not_authorise_a_one_to_one_session():
+    """A serving profile is not an authorisation for a 1:1 session.
+
+    A profile name says which agent RAN the turn, not what the work belongs to.
+    A chat opened in a client profile to work on Hermes/BDH is served by that
+    profile and would be filed into the client vault on every idle pass, with no
+    residual signal distinguishing it from real client work. The profile stays
+    authoritative inside a room (corroborated by the registry entry and the full
+    membership) and is never a 1:1 fallback.
+    """
     assert resolve_synthesis_vault(
         session_profile="client-a",
         policy=POLICY,
         registry={},
-    ) == "vault-a"
+    ) is None
     assert resolve_synthesis_vault(
         session_profile="client-a-reviewer",
         policy=POLICY,
         registry={},
+    ) is None
+
+
+def test_addressed_actor_authorises_a_one_to_one_session():
+    """The addressed actor is what authorises a 1:1 session."""
+    assert resolve_synthesis_vault(
+        session_profile="client-a",
+        session_mentions=["@client-a"],
+        policy=POLICY,
+        registry={},
+    ) == "vault-a"
+    # The addressed actor also routes a client task run from an unrelated
+    # profile, which is the case the serving-profile fallback used to miss.
+    assert resolve_synthesis_vault(
+        session_profile="default",
+        session_mentions=["@client-a-reviewer"],
+        policy=POLICY,
+        registry={},
+    ) == "vault-a"
+
+
+def test_serving_profile_still_authorises_inside_a_room():
+    """Inside a room the profile is corroborated, so it stays authoritative."""
+    members = [{"profile": "client-a"}, {"profile": "client-a-triage"}]
+    assert resolve_synthesis_vault(
+        session_profile="client-a",
+        room_id="r1",
+        room_members=members,
+        policy=POLICY,
+        registry={"r1": "vault-a"},
     ) == "vault-a"
 
 
@@ -155,12 +195,38 @@ def test_watcher_rebuilds_conservative_pairs(tmp_path, monkeypatch):
     ]
 
 
-def test_watcher_uses_the_serving_profile_not_the_transcript(tmp_path, monkeypatch):
+def test_watcher_skips_a_profile_served_session_without_an_addressed_actor(tmp_path, monkeypatch):
+    """A client profile is not what authorises a 1:1 session.
+
+    The session below is served by the client profile and its transcript never
+    names a client, but nothing distinguishes it from a chat opened in that
+    profile to work on Hermes/BDH. It is skipped rather than filed into the
+    client vault.
+    """
     db_path = tmp_path / "state.db"
     _db(db_path, profile_name="client-a")
     policy_file = tmp_path / "policy.json"
     policy_file.write_text(
         '{"version": 1, "profile_vaults": {"client-a": "vault-a"},'
+        ' "allow_room_registry": false}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BDH_SYNTHESIS_POLICY_FILE", str(policy_file))
+    watcher = TranscriptIdleWatcher(db_path=db_path, state_path=tmp_path / "idle.json")
+
+    turns = watcher.rebuild_turns("s1")
+
+    assert turns and all(turn["vault_id"] is None for turn in turns)
+
+
+def test_watcher_routes_a_profile_served_session_by_its_addressed_actor(tmp_path, monkeypatch):
+    """The addressed actor is what routes a 1:1 session, whoever served it."""
+    db_path = tmp_path / "state.db"
+    _db(db_path, profile_name="client-a", user_text="ask @client-a about")
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        '{"version": 1, "profile_vaults": {"client-a": "vault-a"},'
+        ' "mention_prefixes": {"client-a": "vault-a"},'
         ' "allow_room_registry": false}',
         encoding="utf-8",
     )
@@ -190,6 +256,12 @@ def test_watcher_skips_a_default_profile_session_mentioning_a_client(tmp_path, m
 
 
 def test_watcher_reads_secondary_profile_databases(tmp_path, monkeypatch):
+    """A secondary profile's state.db is discovered and scanned.
+
+    The routing expectation here is the actor gate's: the client-profile session
+    is found and processed, but only its addressed actor would authorise a vault
+    (neither session names one, so both are skipped rather than filed).
+    """
     home = tmp_path / ".hermes"
     (home / "profiles" / "vault-a").mkdir(parents=True)
     _db(home / "state.db", session_id="default-sess", profile_name="default")
@@ -209,7 +281,7 @@ def test_watcher_reads_secondary_profile_databases(tmp_path, monkeypatch):
 
     assert set(watcher.session_activity()) == {"default-sess", "client-sess"}
     client_turns = watcher.rebuild_turns("client-sess")
-    assert client_turns and all(t["vault_id"] == "vault-a" for t in client_turns)
+    assert client_turns and all(t["vault_id"] is None for t in client_turns)
     default_turns = watcher.rebuild_turns("default-sess")
     assert default_turns and all(t["vault_id"] is None for t in default_turns)
 
