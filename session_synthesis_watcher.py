@@ -16,12 +16,16 @@ from pathlib import Path
 from typing import Any
 
 from session_idle import SessionIdleWatcher
-from synthesis_scope import load_policy, resolve_synthesis_vault
+from synthesis_scope import extract_mentions, load_policy, resolve_synthesis_vault
 
 logger = logging.getLogger(__name__)
 
 # Session sources served by a Hermes profile rather than by a user terminal.
-_PROFILE_SERVED_SOURCES = ("tui", "mission-control", "bot_room")
+# ``bot_room`` is deliberately excluded: those sessions are the per-member turns
+# *inside* a hosted room, and the room watcher already synthesizes the room as a
+# whole from its aggregated transcript. Scanning them here would synthesize the
+# same conversation twice, from a partial view.
+_PROFILE_SERVED_SOURCES = ("tui", "mission-control")
 
 
 class TranscriptIdleWatcher:
@@ -126,19 +130,27 @@ class TranscriptIdleWatcher:
         session_id: str | None = None,
         db_paths: list[Path] | None = None,
     ) -> str | None:
-        """Authorise a synthesis vault from the serving profile, never the topic.
+        """Authorise a synthesis vault from actors, never from prose.
 
-        The transcript text is deliberately ignored: a session that merely
-        mentions a client's vocabulary must not be written into that client's
-        vault. Authorisation comes from who served the session.
+        Two actor signals are read. The *addressed* actor is the ``@handle``
+        tokens the user typed: they name who was asked to do the work, which is
+        independent of the profile that served the run. The *serving* profile is
+        the fallback. Neither inspects the transcript prose, so a session that
+        merely talks about a client cannot be routed into that client's vault.
         """
         profile_name = None
         if session_id and db_paths:
             _, profile_name = cls._locate_session(session_id, db_paths)
         return resolve_synthesis_vault(
             session_profile=profile_name,
+            session_mentions=cls._mentions_from_turns(turns),
             policy=load_policy(),
         )
+
+    @staticmethod
+    def _mentions_from_turns(turns: list[dict[str, Any]]) -> list[str]:
+        """Collect ``@handle`` tokens addressed in the session's user messages."""
+        return extract_mentions(*[t.get("user") for t in turns])
 
     def rebuild_turns(self, session_id: str) -> list[dict[str, Any]]:
         """Reconstruct conservative pairs; tool/system rows are never buffered."""

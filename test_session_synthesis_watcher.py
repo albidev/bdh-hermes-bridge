@@ -1,3 +1,4 @@
+import json
 import sqlite3
 
 import pytest
@@ -39,6 +40,7 @@ def _db(path, session_id="s1", last_activity=1000.0, source="tui", profile_name=
 
 POLICY = SynthesisPolicy(
     profile_vaults={"client-a": "vault-a"},
+    mention_prefixes={"client-a": "vault-a"},
     allow_room_registry=True,
     room_registry_path="unused.json",
 )
@@ -235,6 +237,118 @@ def test_unauthorised_session_is_skipped_not_flushed_without_a_vault(tmp_path, m
 
     assert flushed == [], "an unauthorised session must not be flushed at all"
     assert watcher.bridge._session_buffers == {}
+
+
+def test_room_turns_are_not_scanned_as_standalone_sessions(tmp_path, monkeypatch):
+    """A room's per-member turns belong to the room watcher, not here.
+
+    Scanning ``bot_room`` sessions in this watcher would synthesize the same
+    conversation twice: once per member from a partial view, and once as the
+    whole room with its aggregated transcript.
+    """
+    from session_synthesis_watcher import _PROFILE_SERVED_SOURCES
+
+    assert "bot_room" not in _PROFILE_SERVED_SOURCES
+
+
+def test_watcher_routes_an_addressed_actor_from_a_default_profile(tmp_path, monkeypatch):
+    """The addressed actor outranks the runner profile.
+
+    This is the case the profile rule cannot see: a client task run by the
+    default profile. The user typed the bot handle, so the work is the bot's.
+    """
+    db_path = tmp_path / "state.db"
+    db = sqlite3.connect(db_path)
+    db.executescript("""
+        create table sessions (id text primary key, source text, profile_name text,
+                               last_activity_at real, ended_at real);
+        create table messages (id integer primary key, session_id text, role text,
+                               content text, finish_reason text, active integer);
+    """)
+    db.execute("insert into sessions values ('s1','tui','default',1000.0,null)")
+    rows = [
+        ("s1", "user", "@client-a please check the deployment", "stop", 1),
+        ("s1", "assistant", "On it.", "stop", 1),
+        ("s1", "user", "any update?", "stop", 1),
+        ("s1", "assistant", "Checking now.", "stop", 1),
+        ("s1", "user", "thanks", "stop", 1),
+        ("s1", "assistant", "Done.", "stop", 1),
+    ]
+    db.executemany("insert into messages(session_id,role,content,finish_reason,active)"
+                   " values (?,?,?,?,?)", rows)
+    db.commit(); db.close()
+
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(json.dumps({
+        "version": 2,
+        "mention_prefixes": {"client-a": "vault-a"},
+        "profile_vaults": {"client-a": "vault-a"},
+        "allow_room_registry": False,
+    }), encoding="utf-8")
+    monkeypatch.setenv("BDH_SYNTHESIS_POLICY_FILE", str(policy_file))
+
+    watcher = TranscriptIdleWatcher(db_path=db_path, state_path=tmp_path / "idle.json")
+    turns = watcher.rebuild_turns("s1")
+
+    assert turns and all(t["vault_id"] == "vault-a" for t in turns)
+
+
+def test_watcher_ignores_prose_that_merely_names_a_client(tmp_path, monkeypatch):
+    """Naming a client in prose is not addressing it.
+
+    The whole point of the actor gate: this transcript is *about* a client but
+    does not address anyone, so it must stay unscoped.
+    """
+    db_path = tmp_path / "state.db"
+    _db(db_path, profile_name="default")
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(json.dumps({
+        "version": 2,
+        "mention_prefixes": {"client-a": "vault-a"},
+        "profile_vaults": {"client-a": "vault-a"},
+        "allow_room_registry": False,
+    }), encoding="utf-8")
+    monkeypatch.setenv("BDH_SYNTHESIS_POLICY_FILE", str(policy_file))
+    watcher = TranscriptIdleWatcher(db_path=db_path, state_path=tmp_path / "idle.json")
+
+    turns = watcher.rebuild_turns("s1")
+
+    assert turns and all(t["vault_id"] is None for t in turns)
+
+
+def test_watcher_authorises_every_bot_behind_the_prefix(tmp_path, monkeypatch):
+    """A prefix mapping covers the whole bot family, not just the bare handle."""
+    for handle in ("client-a", "client-a-triage", "client-a-reviewer"):
+        db_path = tmp_path / f"{handle}.db"
+        db = sqlite3.connect(db_path)
+        db.executescript("""
+            create table sessions (id text primary key, source text, profile_name text,
+                                   last_activity_at real, ended_at real);
+            create table messages (id integer primary key, session_id text, role text,
+                                   content text, finish_reason text, active integer);
+        """)
+        db.execute("insert into sessions values ('s1','tui','default',1000.0,null)")
+        db.executemany(
+            "insert into messages(session_id,role,content,finish_reason,active) values (?,?,?,?,?)",
+            [("s1", "user", f"@{handle} take a look", "stop", 1),
+             ("s1", "assistant", "ok", "stop", 1),
+             ("s1", "user", "and?", "stop", 1),
+             ("s1", "assistant", "ok", "stop", 1),
+             ("s1", "user", "done?", "stop", 1),
+             ("s1", "assistant", "yes", "stop", 1)],
+        )
+        db.commit(); db.close()
+
+        policy_file = tmp_path / "policy.json"
+        policy_file.write_text(json.dumps({
+            "version": 2,
+            "mention_prefixes": {"client-a": "vault-a"},
+            "allow_room_registry": False,
+        }), encoding="utf-8")
+        monkeypatch.setenv("BDH_SYNTHESIS_POLICY_FILE", str(policy_file))
+        w = TranscriptIdleWatcher(db_path=db_path, state_path=tmp_path / f"{handle}-idle.json")
+        turns = w.rebuild_turns("s1")
+        assert turns and turns[0]["vault_id"] == "vault-a", handle
 
 
 def test_recovery_target_emits_once_after_idle(tmp_path, monkeypatch):
