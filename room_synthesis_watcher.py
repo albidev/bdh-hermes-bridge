@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import threading
@@ -47,6 +48,8 @@ from typing import Any
 
 from session_idle import SessionIdleWatcher
 from synthesis_scope import resolve_synthesis_vault
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_BDH_URL = "http://127.0.0.1:8643"
 DEFAULT_MIN_TURNS = 3
@@ -255,6 +258,12 @@ class RoomSynthesisWatcher:
             return
         transcript_sha256 = hashlib.sha256(transcript.encode("utf-8")).hexdigest()
         vault_id = self.resolve_vault(room_id, transcript)
+        # Fail-closed: BDH routes a request without vault_id to its configured
+        # default, so posting anyway would land an unauthorised room transcript
+        # in a vault. Skipping is the only safe outcome.
+        if not vault_id:
+            logger.info("[room-synthesis] room %s skipped — no authorised vault", room_id)
+            return
         metadata = {
             "synthesis_id": str(
                 uuid.uuid5(
@@ -272,10 +281,9 @@ class RoomSynthesisWatcher:
             "query": _SYNTHESIS_QUERY,
             "user_prompt": transcript,
             "source": "room_synthesis",
+            "vault_id": vault_id,
             "metadata": metadata,
         }
-        if vault_id:
-            payload["vault_id"] = vault_id
         if self.dry_run:
             print(
                 f"[dry-run] room {room_id}: would POST {self.bdh_url}/api/query "
