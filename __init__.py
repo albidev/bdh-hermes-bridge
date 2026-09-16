@@ -1141,7 +1141,38 @@ def _remember_session_turn(session_id, user_message, assistant_text,
         _session_buffer_store.append(session_id, entry)
 
 
-def _flush_session_synthesis(session_id, final=True, wait=False):
+def _build_session_transcript(buf):
+    """Return ``(transcript, accepted_count, context_only_count)`` for a buffer.
+
+    Single owner of the transcript shape. The idle flush below sends what this
+    returns, and the standalone watcher digests the same output to decide whether
+    a session was already synthesized — so the two cannot disagree about what a
+    session's content is. Re-deriving it in the watcher would let a formatting
+    change silently break the ledger's dedupe (the digest would no longer match
+    the transcript that was submitted).
+    """
+    lines = []
+    accepted_count = 0
+    context_only_count = 0
+    for t in buf:
+        u = t.get("user", "").strip()
+        a = t.get("assistant", "").strip()
+        if t.get("context_only"):
+            context_only_count += 1
+        else:
+            accepted_count += 1
+        if not u:
+            continue
+        lines.append(f"USER: {u}")
+        if a:
+            lines.append(f"ASSISTANT: {a}")
+    transcript = "\n".join(lines)
+    if len(transcript) > _SESSION_SYNTH_MAX_CHARS:
+        transcript = transcript[-_SESSION_SYNTH_MAX_CHARS:]
+    return transcript, accepted_count, context_only_count
+
+
+def _flush_session_synthesis(session_id, final=True, wait=False, on_success=None):
     """Fire-and-forget a curated session synthesis to BDH, if worth it.
 
     ``final=True`` (finalize/reset) is the authoritative teardown: the buffer
@@ -1205,24 +1236,7 @@ def _flush_session_synthesis(session_id, final=True, wait=False):
     synthesis_vault_id = next(iter(scopes), None)
 
     # Compact the transcript, keeping user questions and assistant answers.
-    lines = []
-    accepted_count = 0
-    context_only_count = 0
-    for t in buf:
-        u = t.get("user", "").strip()
-        a = t.get("assistant", "").strip()
-        if t.get("context_only"):
-            context_only_count += 1
-        else:
-            accepted_count += 1
-        if not u:
-            continue
-        lines.append(f"USER: {u}")
-        if a:
-            lines.append(f"ASSISTANT: {a}")
-    transcript = "\n".join(lines)
-    if len(transcript) > _SESSION_SYNTH_MAX_CHARS:
-        transcript = transcript[-_SESSION_SYNTH_MAX_CHARS:]
+    transcript, accepted_count, context_only_count = _build_session_transcript(buf)
 
     transcript_sha256 = hashlib.sha256(transcript.encode("utf-8")).hexdigest()
 
@@ -1248,7 +1262,17 @@ def _flush_session_synthesis(session_id, final=True, wait=False):
         "noise. Ignore operational status, diagnostics, and transient tasks."
     )
     # _bdh_query_async already spawns its own daemon thread (fire-and-forget),
-    # so call it directly — no nested thread needed.
+    # so call it directly — no nested thread needed. `on_success` fires only
+    # after BDH accepted the request, which is what makes it the right place for
+    # a caller to record that the content landed (a digest written on a failure
+    # would drop that transcript permanently).
+    def _notify_success():
+        if on_success is not None:
+            try:
+                on_success(transcript_sha256)
+            except Exception as cb_err:
+                logger.warning(f"[bdh-bridge] session synthesis on_success error: {cb_err}")
+
     try:
         _bdh_query_async(
             query_text=query,
@@ -1257,6 +1281,7 @@ def _flush_session_synthesis(session_id, final=True, wait=False):
             vault_id=synthesis_vault_id,
             metadata=metadata,
             wait=wait,
+            on_success=_notify_success,
         )
         if _session_buffer_store is not None:
             _session_buffer_store.remove(session_id)
