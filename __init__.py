@@ -44,7 +44,7 @@ v0.7.1:
     process-global session-rotation inference (#14)
   - Each session buffer is flushed at most once via _flushed_sessions guard
   - Opt-in via BDH_SESSION_SYNTH_ENABLED=true (default off)
-  - BDH_SESSION_SYNTH_MIN_TURNS (default 3), BDH_SESSION_SYNTH_MAX_CHARS (default 6000)
+  - BDH_SESSION_SYNTH_MIN_TURNS (default 1), BDH_SESSION_SYNTH_MAX_CHARS (default 20000)
 
 v0.6.0:
   - Language-agnostic multi-query retrieval bridge normalization (#19)
@@ -159,10 +159,14 @@ _SESSION_SYNTH_ENABLED = os.environ.get("BDH_SESSION_SYNTH_ENABLED", "").lower()
 _SESSION_SYNTH_MIN_TURNS = _bounded_int(
     os.environ.get("BDH_SESSION_SYNTH_MIN_TURNS", "1"), 1, maximum=100
 )
-# Cap the transcript we feed to the synthesis so a long session cannot blow up
-# the BDH request / neurogenesis context.
+# Cap the transcript fed to the synthesis so a long session cannot blow up the
+# BDH request / neurogenesis context. Raised from 6000: a single agentic answer
+# measured 9858 chars, so a 6000-char budget could not hold even one real
+# exchange, and the tail-only truncation then dropped the earlier turns
+# entirely. The local oMLX model takes long contexts (131k for the configured
+# model), so 20000 keeps several substantive turns without straining it.
 _SESSION_SYNTH_MAX_CHARS = _bounded_int(
-    os.environ.get("BDH_SESSION_SYNTH_MAX_CHARS", "6000"), 6000, maximum=100000
+    os.environ.get("BDH_SESSION_SYNTH_MAX_CHARS", "20000"), 20000, maximum=100000
 )
 # Synthesising a full session on the local oMLX model is slow (minutes, not
 # seconds): the client must wait long enough for the request to complete. The
