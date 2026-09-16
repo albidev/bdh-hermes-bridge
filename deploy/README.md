@@ -47,10 +47,35 @@ skip the flush entirely when nothing is authorized. That requires:
   Control. Only the room watcher needs it. Note the registry is per-*room*, so a
   room mapped to a client vault is only a starting point: the member profiles
   must agree, and a room with a `default` participant is refused.
+- **`BDH_SYNTHESIS_LEDGER_FILE`** — room watcher only. Records the transcript
+  digest last submitted per room, so re-synthesis is decided by CONTENT rather
+  than by an observed transition. Defaults to
+  `$HERMES_HOME/bdh-synthesis-ledger.json`. Delete it to force one full
+  re-synthesis pass.
 
 The policy file's default path is anchored to the module directory, so a
 daemon whose working directory differs still finds it. Prefer an explicit
 `BDH_SYNTHESIS_POLICY_FILE` anyway.
+
+## Why the room watcher has a recovery pass
+
+The idle trigger is a **live → idle transition**, and that is correct for
+steady state: without it a quiet room would be re-synthesized on every poll.
+
+It is not sufficient on its own. A room that was already quiescent *before the
+daemon started* never crosses that transition while being observed — the state
+it must leave is the state it is already in — so it can never be synthesized,
+and nothing in the logs distinguishes that from "nothing to synthesize".
+
+The room watcher therefore runs one **bounded backlog pass at startup**
+(`--backlog-limit`, default 3; `0` disables). Eligibility is content-based via
+the ledger, so the pass submits a room once and a restart does not re-submit it.
+New messages change the digest and reopen the room.
+
+```bash
+# Inspect the backlog without posting anything.
+PYTHONUNBUFFERED=1 python room_synthesis_watcher.py --backlog-once --dry-run
+```
 
 ## Verifying a running watcher
 
@@ -59,11 +84,14 @@ The idle watcher fires only on a **live → idle** transition, and
 wait at least ~35s on a room that is genuinely older than the threshold, and
 run the script with `-u` / `PYTHONUNBUFFERED=1`: the daemon's stdout is
 block-buffered when it is not a terminal, so a silent log file does not mean the
-watcher is idle.
+watcher is idle. Note that `--once` alone emits nothing for an already-idle
+room by design — use `--backlog-once` to reach that case.
 
 ```bash
 PYTHONUNBUFFERED=1 python room_synthesis_watcher.py --dry-run --once   # no writes
 ```
 
 `--dry-run` prints the exact payload it would post, including the resolved
-`vault_id`, without contacting BDH.
+`vault_id`, without contacting BDH. In dry-run mode the ledger IS written (the
+pass is simulated, not skipped), so a dry-run then suppresses a real pass for
+the same content — clear the ledger file if you want to repeat it.
