@@ -21,6 +21,34 @@ from synthesis_scope import extract_mentions, load_policy, resolve_synthesis_vau
 
 logger = logging.getLogger(__name__)
 
+# The minimum-turn floor is OWNED by the bridge, not duplicated here. Both paths
+# must agree: the standalone watcher serves TUI/Mission Control sessions and the
+# bridge's in-process idle watcher serves the rest, so a literal here meant a
+# configured BDH_SESSION_SYNTH_MIN_TURNS changed one path and silently left the
+# other at 3 — the same "two resolvers, one decision" drift as the split home
+# resolver. Read through the bridge; fall back only if it cannot be imported, so
+# a missing bridge degrades the floor rather than the whole watcher.
+_MIN_TURNS_FALLBACK = 1
+
+
+def _min_turns() -> int:
+    """Return the shared minimum-turn floor (bridge-owned, ``>= 1``)."""
+    try:
+        import importlib
+
+        bridge = importlib.import_module(
+            __package__ + ".__init__" if __package__ else "__init__"
+        )
+        return max(1, int(bridge._SESSION_SYNTH_MIN_TURNS))
+    except Exception:
+        # A plugin loader may run this file as a plain module with no package,
+        # and the bridge reads env at import time. Falling back to the env var
+        # keeps a configured value honoured in that mode too.
+        try:
+            return max(1, int(os.environ.get("BDH_SESSION_SYNTH_MIN_TURNS", _MIN_TURNS_FALLBACK)))
+        except (TypeError, ValueError):
+            return _MIN_TURNS_FALLBACK
+
 # Session sources served by a Hermes profile rather than by a user terminal.
 # ``bot_room`` is deliberately excluded: those sessions are the per-member turns
 # *inside* a hosted room, and the room watcher already synthesizes the room as a
@@ -203,7 +231,7 @@ class TranscriptIdleWatcher:
 
     def _on_idle(self, session_id: str) -> None:
         turns = self.rebuild_turns(session_id)
-        if len(turns) < 3:
+        if len(turns) < _min_turns():
             return
         # The actor gate is fail-closed: an unauthorised session is skipped, not
         # flushed with no vault. A no-vault flush would be routed by BDH to its

@@ -27,6 +27,12 @@
          synthesis_scope.py. Without it the watcher synthesizes nothing. -->
     <key>BDH_SYNTHESIS_POLICY_FILE</key>
     <string>__REPO__/synthesis-policy.local.json</string>
+    <!-- Minimum completed turns before a session is worth synthesising. Owned by
+         the bridge and read by BOTH the standalone watcher and the in-process
+         idle path, so they cannot diverge. 1 = a single well-answered exchange
+         qualifies. -->
+    <key>BDH_SESSION_SYNTH_MIN_TURNS</key>
+    <string>1</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

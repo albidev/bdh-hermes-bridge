@@ -436,3 +436,114 @@ def test_recovery_target_emits_once_after_idle(tmp_path, monkeypatch):
     assert watcher.scan_once(now=1400.0) == 1
     assert events == ["s1"]
     assert watcher.scan_once(now=1500.0) == 0
+
+
+# ---------------------------------------------------------------------------
+# The minimum-turn floor must be honoured AT THE CALL SITE, not just returned.
+#
+# Asserting on `_min_turns()` alone is not enough: it proves the helper reads the
+# right value while the flush could still compare against a literal. That is the
+# "correct gate, wrong caller" shape — the gate is right and the leak persists one
+# layer down. These tests drive `_on_idle` with a real authorised session and
+# assert on whether the flush actually happened.
+# ---------------------------------------------------------------------------
+
+def _authorised_one_turn_db(path, session_id="s1"):
+    """One completed exchange, authorised via an addressed actor."""
+    db = sqlite3.connect(path)
+    db.executescript("""
+        create table sessions (id text primary key, source text, profile_name text,
+                               last_activity_at real, ended_at real);
+        create table messages (id integer primary key, session_id text, role text,
+                               content text, finish_reason text, active integer);
+    """)
+    db.execute(
+        "insert into sessions values (?, 'tui', 'default', 1000.0, null)",
+        (session_id,),
+    )
+    db.executemany(
+        "insert into messages(session_id,role,content,finish_reason,active) values (?,?,?,?,1)",
+        [
+            (session_id, "user", "@client-a one question", "stop"),
+            (session_id, "assistant", "one answer", "stop"),
+        ],
+    )
+    db.commit()
+    db.close()
+
+
+def _watcher_with_stub_bridge(db_path, tmp_path, monkeypatch):
+    """A watcher whose bridge records flushes instead of posting them."""
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(json.dumps({
+        "version": 1,
+        "mention_prefixes": {"client-a": "vault-a"},
+        "profile_vaults": {"client-a": "vault-a"},
+        "allow_room_registry": False,
+    }), encoding="utf-8")
+    monkeypatch.setenv("BDH_SYNTHESIS_POLICY_FILE", str(policy_file))
+    watcher = TranscriptIdleWatcher(db_path=db_path, state_path=tmp_path / "idle.json")
+    flushed = []
+    watcher.bridge = type("B", (), {
+        "_bdh_state_lock": __import__("threading").RLock(),
+        "_session_buffers": {},
+        "_flush_session_synthesis": lambda *a, **k: flushed.append(a),
+    })()
+    return watcher, flushed
+
+
+def test_one_turn_session_is_flushed_at_the_default_floor(tmp_path, monkeypatch):
+    """A single well-answered exchange must reach the flush.
+
+    The floor used to be 3, so this session was silently dropped even though the
+    actor authorisation resolved a vault. The per-turn write path that justified
+    the higher floor is opt-in and unset, so nothing covered this session
+    anywhere else.
+    """
+    db_path = tmp_path / "state.db"
+    _authorised_one_turn_db(db_path)
+    import __init__ as bridge_mod
+    monkeypatch.setattr(bridge_mod, "_SESSION_SYNTH_MIN_TURNS", 1)
+    watcher, flushed = _watcher_with_stub_bridge(db_path, tmp_path, monkeypatch)
+
+    watcher._on_idle("s1")
+
+    assert [call[-1] for call in flushed] == ["s1"], (
+        "a one-turn authorised session must be flushed"
+    )
+
+
+def test_the_call_site_follows_the_floor_it_is_given(tmp_path, monkeypatch):
+    """Below the configured floor the flush must NOT happen.
+
+    This is what pins the CALL SITE: a literal `3` here would flush this session
+    regardless of the configured floor, which is exactly the drift the single
+    source of truth exists to prevent.
+    """
+    db_path = tmp_path / "state.db"
+    _authorised_one_turn_db(db_path)
+    import __init__ as bridge_mod
+    monkeypatch.setattr(bridge_mod, "_SESSION_SYNTH_MIN_TURNS", 3)
+    watcher, flushed = _watcher_with_stub_bridge(db_path, tmp_path, monkeypatch)
+
+    watcher._on_idle("s1")
+
+    assert flushed == [], "a 1-turn session must not flush when the floor is 3"
+
+
+def test_the_same_session_flushes_when_the_floor_allows_it(tmp_path, monkeypatch):
+    """Same session, same content: only the floor differs. Proves causality."""
+    db_path = tmp_path / "state.db"
+    _authorised_one_turn_db(db_path)
+    import __init__ as bridge_mod
+
+    monkeypatch.setattr(bridge_mod, "_SESSION_SYNTH_MIN_TURNS", 3)
+    watcher_low, flushed_low = _watcher_with_stub_bridge(db_path, tmp_path, monkeypatch)
+    watcher_low._on_idle("s1")
+
+    monkeypatch.setattr(bridge_mod, "_SESSION_SYNTH_MIN_TURNS", 1)
+    watcher_ok, flushed_ok = _watcher_with_stub_bridge(db_path, tmp_path, monkeypatch)
+    watcher_ok._on_idle("s1")
+
+    assert flushed_low == []
+    assert [call[-1] for call in flushed_ok] == ["s1"]
