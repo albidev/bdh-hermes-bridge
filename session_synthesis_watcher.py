@@ -30,12 +30,36 @@ logger = logging.getLogger(__name__)
 # a missing bridge degrades the floor rather than the whole watcher.
 _MIN_TURNS_FALLBACK = 1
 
-# Per-turn text caps. The old 1500 truncated an agentic answer mid-sentence: the
-# observed reply was 9858 chars, so a 1500-char slice kept the preamble and
-# dropped the findings. These are per FIELD, so a turn's total is up to the sum;
-# the transcript cap below is what bounds the request.
-_TURN_USER_MAX_CHARS = int(os.environ.get("BDH_SESSION_TURN_USER_MAX_CHARS", "4000") or 4000)
-_TURN_ASSISTANT_MAX_CHARS = int(os.environ.get("BDH_SESSION_TURN_ASSISTANT_MAX_CHARS", "12000") or 12000)
+
+def _caps() -> tuple[int, int]:
+    """Return ``(user_max_chars, assistant_max_chars)`` from the bridge.
+
+    The per-turn caps are owned by the bridge (``__init__._SESSION_TURN_*``) and
+    read here so the two synthesis paths cannot drift. They previously differed:
+    the standalone used a literal 1500 while the bridge was configured separately,
+    so the same session produced a different transcript depending on which path
+    picked it up. Falls back to the env vars (then to the bridge's own defaults)
+    when the bridge is unimportable, so a plain-module launch degrades the source
+    rather than the watcher.
+    """
+    try:
+        import importlib
+
+        bridge = importlib.import_module(
+            __package__ + ".__init__" if __package__ else "__init__"
+        )
+        return (
+            max(1, int(bridge._SESSION_TURN_USER_MAX_CHARS)),
+            max(1, int(bridge._SESSION_TURN_ASSISTANT_MAX_CHARS)),
+        )
+    except Exception:
+        try:
+            return (
+                max(1, int(os.environ.get("BDH_SESSION_TURN_USER_MAX_CHARS", "4000"))),
+                max(1, int(os.environ.get("BDH_SESSION_TURN_ASSISTANT_MAX_CHARS", "12000"))),
+            )
+        except (TypeError, ValueError):
+            return 4000, 12000
 
 
 def _min_turns() -> int:
@@ -236,12 +260,13 @@ class TranscriptIdleWatcher:
         turns: list[dict[str, Any]] = []
         pending_user: str | None = None
         parts: list[str] = []
+        user_cap, assistant_cap = _caps()
 
         def _flush() -> None:
             if pending_user and parts:
                 turns.append({
-                    "user": pending_user[:_TURN_USER_MAX_CHARS],
-                    "assistant": "\n".join(parts)[:_TURN_ASSISTANT_MAX_CHARS],
+                    "user": pending_user[:user_cap],
+                    "assistant": "\n".join(parts)[:assistant_cap],
                     "vault_id": None,
                     "context_only": True,
                 })
