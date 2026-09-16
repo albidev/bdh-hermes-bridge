@@ -159,6 +159,20 @@ _SESSION_SYNTH_ENABLED = os.environ.get("BDH_SESSION_SYNTH_ENABLED", "").lower()
 _SESSION_SYNTH_MIN_TURNS = _bounded_int(
     os.environ.get("BDH_SESSION_SYNTH_MIN_TURNS", "1"), 1, maximum=100
 )
+# Per-turn text caps for the session transcript buffer. These are the SINGLE
+# source of truth for both synthesis paths: the in-process buffer below uses them
+# directly, and the standalone watcher (which reconstructs turns from state.db)
+# reads them through this module so the two cannot drift.
+#
+# 1500 truncated an agentic answer mid-sentence: a measured reply was 9858 chars,
+# so a 1500-char slice kept the preamble and dropped the findings the vault exists
+# to learn. 85% of the content was lost on any turn answered at length.
+_SESSION_TURN_USER_MAX_CHARS = _bounded_int(
+    os.environ.get("BDH_SESSION_TURN_USER_MAX_CHARS", "4000"), 4000, maximum=100000
+)
+_SESSION_TURN_ASSISTANT_MAX_CHARS = _bounded_int(
+    os.environ.get("BDH_SESSION_TURN_ASSISTANT_MAX_CHARS", "12000"), 12000, maximum=100000
+)
 # Cap the transcript fed to the synthesis so a long session cannot blow up the
 # BDH request / neurogenesis context. Raised from 6000: a single agentic answer
 # measured 9858 chars, so a 6000-char budget could not hold even one real
@@ -1111,21 +1125,20 @@ def _remember_session_turn(session_id, user_message, assistant_text,
         # Cap buffer length to bound memory on very long sessions.
         if len(buf) >= 200:
             buf.pop(0)
-        buf.append({
-            "user": (user_message or "")[:1500],
-            "assistant": (assistant_text or "")[:1500],
+        entry = {
+            "user": (user_message or "")[:_SESSION_TURN_USER_MAX_CHARS],
+            "assistant": (assistant_text or "")[:_SESSION_TURN_ASSISTANT_MAX_CHARS],
             "vault_id": vault_id,
             "context_only": bool(context_only),
-        })
+        }
+        buf.append(entry)
     if _session_idle_watcher is not None:
         _session_idle_watcher.mark_live(session_id)
     if _session_buffer_store is not None:
-        _session_buffer_store.append(session_id, {
-            "user": (user_message or "")[:1500],
-            "assistant": (assistant_text or "")[:1500],
-            "vault_id": vault_id,
-            "context_only": bool(context_only),
-        })
+        # Same caps as the in-memory buffer: the persisted copy is what a restarted
+        # process recovers from, so a narrower limit here would silently downgrade
+        # the transcript after a restart.
+        _session_buffer_store.append(session_id, entry)
 
 
 def _flush_session_synthesis(session_id, final=True, wait=False):
