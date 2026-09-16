@@ -82,6 +82,7 @@ import json
 import logging
 import os
 import re
+import socket
 import sqlite3
 import sys
 import threading
@@ -190,6 +191,12 @@ _SESSION_SYNTH_MAX_CHARS = _bounded_int(
 _SESSION_SYNTH_TIMEOUT = _bounded_int(
     os.environ.get("BDH_SESSION_SYNTH_TIMEOUT", "300"), 300, minimum=60, maximum=600
 )
+_BDH_PER_TURN_TIMEOUT = _bounded_int(
+    os.environ.get("BDH_PER_TURN_TIMEOUT", "60"), 60, minimum=5, maximum=600
+)
+_BDH_PER_TURN_MAX_INFLIGHT = _bounded_int(
+    os.environ.get("BDH_PER_TURN_MAX_INFLIGHT", "4"), 4, minimum=1, maximum=32
+)
 _turn_states = {}
 _session_buffers = {}  # session_id -> list of {"user": ..., "assistant": ...}
 _flushed_sessions = set()  # session_ids already flushed — never double-flush
@@ -198,6 +205,7 @@ _session_finalize_requested = set()  # sessions waiting for pending writes to se
 _session_idle_requested = set()  # sessions waiting for pending writes before an idle flush
 _bdh_used_sessions = set()
 _bdh_state_lock = threading.Lock()
+_bdh_per_turn_slots = threading.BoundedSemaphore(_BDH_PER_TURN_MAX_INFLIGHT)
 _SESSION_SYNTH_IDLE_SECONDS = float(os.environ.get("BDH_SESSION_SYNTH_IDLE_SECONDS", "300") or 300)
 _SESSION_SYNTH_IDLE_POLL_SECONDS = float(os.environ.get("BDH_SESSION_SYNTH_IDLE_POLL_SECONDS", "60") or 60)
 _session_idle_watcher = None
@@ -1334,6 +1342,18 @@ def _on_session_idle(**kwargs):
 # BDH HTTP helpers
 # ---------------------------------------------------------------------------
 
+def _is_timeout_error(error):
+    """Return whether *error* represents a socket/request timeout."""
+    if isinstance(error, (TimeoutError, socket.timeout)):
+        return True
+    if isinstance(error, URLError):
+        reason = error.reason
+        if isinstance(reason, (TimeoutError, socket.timeout)):
+            return True
+        return "timeout" in str(reason).lower() or "timed out" in str(reason).lower()
+    return False
+
+
 def _bdh_request(endpoint, data=None, timeout=10, retries=1, backoff_base=2.0,
                  retry_on_timeout=True):
     """HTTP request to BDH API with optional retry + exponential backoff.
@@ -1366,14 +1386,12 @@ def _bdh_request(endpoint, data=None, timeout=10, retries=1, backoff_base=2.0,
         except (URLError, OSError, json.JSONDecodeError) as e:
             last_error = e
             # Don't retry on timeout for POST requests (non-idempotent)
-            if not retry_on_timeout and isinstance(e, URLError):
-                reason = getattr(e, 'reason', '')
-                if 'timed out' in str(reason).lower() or 'timeout' in str(reason).lower():
-                    logger.warning(
-                        f"[bdh-bridge] timeout on {endpoint} (not retrying — "
-                        f"non-idempotent POST)"
-                    )
-                    return None
+            if not retry_on_timeout and _is_timeout_error(e):
+                logger.warning(
+                    f"[bdh-bridge] timeout on {endpoint} (not retrying — "
+                    f"non-idempotent POST)"
+                )
+                return None
             if attempt < retries - 1:
                 wait = backoff_base ** attempt
                 logger.warning(
@@ -1510,6 +1528,24 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
             forwarded verbatim so downstream audit consumers can correlate
             requests without re-deriving fields.
     """
+    is_per_turn = source == "assistant_response"
+    slot_acquired = False
+    if is_per_turn:
+        slot_acquired = _bdh_per_turn_slots.acquire(blocking=False)
+        if not slot_acquired:
+            logger.warning(
+                "[bdh-bridge] per-turn write saturated — dropping ambiguous write "
+                "without retry; releasing lifecycle barrier"
+            )
+            if on_complete is not None:
+                try:
+                    on_complete()
+                except Exception as cb_err:
+                    logger.warning(
+                        f"[bdh-bridge] on_complete callback error: {cb_err}"
+                    )
+            return None
+
     def _worker():
         payload = {"query": query_text}
         resolved_vault_id = _resolve_vault_id(vault_id)
@@ -1528,7 +1564,8 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
             # would abort the read mid-generation. Long timeout only for the
             # session-synthesis source (fire-and-forget worker, non-blocking).
             request_timeout = (
-                _SESSION_SYNTH_TIMEOUT if source == "session_synthesis" else 30
+                _SESSION_SYNTH_TIMEOUT if source == "session_synthesis"
+                else _BDH_PER_TURN_TIMEOUT
             )
             result = _bdh_request("/api/query", payload, timeout=request_timeout, retries=2,
                                   retry_on_timeout=False)
@@ -1551,6 +1588,8 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
             else:
                 logger.warning("[bdh-bridge] BDH unreachable — consolidation or server down")
         finally:
+            if slot_acquired:
+                _bdh_per_turn_slots.release()
             if on_complete is not None:
                 try:
                     on_complete()

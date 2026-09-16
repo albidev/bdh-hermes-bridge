@@ -431,6 +431,157 @@ def test_pre_llm_falls_back_when_bdh_is_offline(monkeypatch):
     assert result is None
 
 
+def test_direct_timeout_does_not_retry_non_idempotent_request(monkeypatch):
+    import urllib.request
+
+    attempts = []
+
+    def urlopen(req, timeout):
+        attempts.append((req.full_url, timeout))
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    assert bridge._bdh_request(
+        "/api/query",
+        {"query": "non-idempotent write"},
+        timeout=30,
+        retries=2,
+        retry_on_timeout=False,
+    ) is None
+    assert len(attempts) == 1
+
+
+def test_wrapped_timeout_does_not_retry_non_idempotent_request(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    attempts = []
+
+    def urlopen(req, timeout):
+        attempts.append((req.full_url, timeout))
+        raise urllib.error.URLError(TimeoutError("timed out"))
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    assert bridge._bdh_request(
+        "/api/query",
+        {"query": "non-idempotent write"},
+        timeout=30,
+        retries=2,
+        retry_on_timeout=False,
+    ) is None
+    assert len(attempts) == 1
+
+
+def test_non_timeout_error_keeps_configured_retry_count(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    attempts = []
+
+    def urlopen(req, timeout):
+        attempts.append((req.full_url, timeout))
+        raise urllib.error.URLError("connection reset")
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    assert bridge._bdh_request(
+        "/api/query",
+        {"query": "retryable failure"},
+        timeout=30,
+        retries=2,
+        retry_on_timeout=False,
+    ) is None
+    assert len(attempts) == 2
+
+
+def test_per_turn_write_uses_configured_timeout(monkeypatch):
+    completed = threading.Event()
+    captured = {}
+
+    monkeypatch.setattr(bridge, "_BDH_PER_TURN_TIMEOUT", 47, raising=False)
+
+    def fake_request(endpoint, payload, **kwargs):
+        captured.update(endpoint=endpoint, timeout=kwargs["timeout"])
+        return {"ok": True}
+
+    monkeypatch.setattr(bridge, "_bdh_request", fake_request)
+    bridge._bdh_query_async(
+        "turn query",
+        source="assistant_response",
+        on_complete=completed.set,
+    )
+
+    assert completed.wait(1)
+    assert captured == {"endpoint": "/api/query", "timeout": 47}
+
+
+def test_session_synthesis_keeps_independent_timeout(monkeypatch):
+    completed = threading.Event()
+    captured = {}
+
+    monkeypatch.setattr(bridge, "_SESSION_SYNTH_TIMEOUT", 123)
+
+    def fake_request(endpoint, payload, **kwargs):
+        captured.update(endpoint=endpoint, timeout=kwargs["timeout"])
+        return {"ok": True}
+
+    monkeypatch.setattr(bridge, "_bdh_request", fake_request)
+    bridge._bdh_query_async(
+        "session synthesis",
+        source="session_synthesis",
+        on_complete=completed.set,
+        wait=True,
+    )
+
+    assert completed.is_set()
+    assert captured == {"endpoint": "/api/query", "timeout": 123}
+
+
+def test_per_turn_saturation_releases_completion_without_starting_request(monkeypatch):
+    completed = threading.Event()
+    requests = []
+
+    monkeypatch.setattr(bridge, "_BDH_PER_TURN_MAX_INFLIGHT", 1, raising=False)
+    monkeypatch.setattr(bridge, "_bdh_per_turn_slots", threading.BoundedSemaphore(1))
+    monkeypatch.setattr(bridge, "_bdh_request", lambda *args, **kwargs: requests.append(1))
+    bridge._bdh_per_turn_slots.acquire()
+    try:
+        worker = bridge._bdh_query_async(
+            "saturated query",
+            source="assistant_response",
+            on_complete=completed.set,
+        )
+        assert worker is None
+        assert completed.is_set()
+        assert requests == []
+    finally:
+        bridge._bdh_per_turn_slots.release()
+
+
+def test_saturated_post_write_releases_pending_barrier(monkeypatch):
+    _enable_synth(monkeypatch)
+    slots = threading.BoundedSemaphore(1)
+    slots.acquire()
+    monkeypatch.setattr(bridge, "_bdh_per_turn_slots", slots)
+    try:
+        state_kwargs = {"session_id": "saturated-session"}
+        bridge._remember_turn_state(
+            state_kwargs,
+            "Store this durable decision despite worker saturation.",
+        )
+        bridge._on_post_api_request(
+            session_id="saturated-session",
+            finish_reason="stop",
+            assistant_message=type("Message", (), {"content": "answer"})(),
+        )
+        assert "saturated-session" not in bridge._session_pending_writes
+        assert bridge._session_buffers.get("saturated-session", []) == []
+    finally:
+        slots.release()
+
+
 def test_sync_query_marks_automatic_retrieval_read_only(monkeypatch):
     captured = {}
 
