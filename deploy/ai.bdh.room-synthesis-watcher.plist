@@ -28,6 +28,11 @@
     <!-- Room -> vault registry written by Mission Control when a room is created. -->
     <key>BDH_ROOM_VAULT_REGISTRY</key>
     <string>__ROOM_REGISTRY__</string>
+    <!-- Last-submitted transcript digest per room. Makes re-synthesis a CONTENT
+         decision instead of an observed live->idle transition, so a room that
+         went quiet before this daemon started is still recovered once. -->
+    <key>BDH_SYNTHESIS_LEDGER_FILE</key>
+    <string>__HERMES_HOME__/bdh-synthesis-ledger.json</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

@@ -15,11 +15,18 @@ Design decisions (user-confirmed, 2026-09-12):
     by this watcher; only active rooms that cross the idle threshold are.
 
 Vault resolution order:
-  1. Mission Control room_vaults.json registry (explicit, set in the room
-     creation form);
-  2. member profile fallback (non-default member profile -> vault id);
-  3. bridge vault_router semantic suggestion (if importable);
-  4. core.
+  Authorised by the room's ACTORS, never by its transcript text. The room
+  registry entry (set in the room creation form) and the member profiles
+  decide; a room with any default participant is not a client scope at all.
+  An unauthorised room is skipped entirely — a request without vault_id is
+  routed by BDH to its configured default.
+
+Re-synthesis is gated by CONTENT, not by an observed transition:
+  `synthesis_ledger.py` records the digest last submitted per room. The idle
+  transition is the trigger; the ledger decides whether the trigger is worth
+  acting on. Without it, a room already quiescent when the watcher starts can
+  never be synthesized (it never crosses live -> idle while observed), and a
+  restart with no ledger would re-submit everything on every pass.
 
 The synthesis request mirrors _bdh_query_async semantics: POST /api/query
 with user_prompt=transcript, source=room_synthesis, vault_id and metadata.
@@ -29,7 +36,7 @@ vaults or candidate directories on its own.
 Usage:
   python3 room_synthesis_watcher.py [--db-path ...] [--state-path ...]
       [--threshold 300] [--interval 60] [--registry ...] [--once]
-      [--dry-run]
+      [--ledger-path ...] [--backlog-limit N] [--backlog-once] [--dry-run]
 """
 from __future__ import annotations
 
@@ -48,6 +55,7 @@ from pathlib import Path
 from typing import Any
 
 from session_idle import SessionIdleWatcher
+from synthesis_ledger import SynthesisLedger
 from synthesis_scope import resolve_synthesis_vault
 
 logger = logging.getLogger(__name__)
@@ -59,6 +67,11 @@ DEFAULT_TIMEOUT = 300.0
 DEFAULT_THRESHOLD = 300.0
 DEFAULT_INTERVAL = 60.0
 DEFAULT_REGISTRY = "~/Projects/hermes-mission-control/server/room_vaults.json"
+LEDGER_ENV = "BDH_SYNTHESIS_LEDGER_FILE"
+DEFAULT_LEDGER = "bdh-synthesis-ledger.json"
+# How many already-idle rooms a startup pass may submit. Bounded on purpose:
+# recovery must never turn into an unbounded synthesis storm on a large backlog.
+DEFAULT_BACKLOG_LIMIT = 3
 
 _KIND_USER = "message.user"
 _KIND_MEMBER = "message.member"
@@ -117,6 +130,8 @@ class RoomSynthesisWatcher:
         max_chars: int = DEFAULT_MAX_CHARS,
         timeout: float = DEFAULT_TIMEOUT,
         dry_run: bool = False,
+        ledger: SynthesisLedger | None = None,
+        backlog_limit: int = DEFAULT_BACKLOG_LIMIT,
     ) -> None:
         self.db_path = Path(db_path)
         self.registry = _load_vault_registry(registry_path)
@@ -125,6 +140,8 @@ class RoomSynthesisWatcher:
         self.max_chars = max_chars
         self.timeout = timeout
         self.dry_run = dry_run
+        self.ledger = ledger
+        self.backlog_limit = max(0, int(backlog_limit))
         self.idle = SessionIdleWatcher(
             state_path,
             threshold_seconds=threshold_seconds,
@@ -250,12 +267,39 @@ class RoomSynthesisWatcher:
             "context_only": False,
         }
 
-    # -- flush ---------------------------------------------------------------
+    def _last_source_seq(self, room_id: str) -> int | None:
+        """Highest ``seq`` of a user/member event, for the ledger cursor.
 
-    def _on_idle(self, room_id: str) -> None:
+        ``seq`` is monotonic per room (``PRIMARY KEY (room_id, seq)``) and
+        indexed, so it is comparable across passes: it records WHICH messages
+        were handled without re-deriving a digest.
+        """
+        try:
+            with closing(self._db()) as db:
+                row = db.execute(
+                    "SELECT MAX(seq) FROM hosted_room_events "
+                    "WHERE room_id = ? AND kind IN (?, ?)",
+                    (room_id, _KIND_USER, _KIND_MEMBER),
+                ).fetchone()
+        except sqlite3.Error:
+            return None
+        if not row or row[0] is None:
+            return None
+        try:
+            return int(row[0])
+        except (TypeError, ValueError):
+            return None
+
+    def transcript_for(self, room_id: str) -> tuple[str, int, int | None]:
+        """Return ``(transcript, turn_count, last_source_seq)`` for a room.
+
+        One place builds the transcript, so the idle path and the backlog pass
+        cannot disagree about what a room's content is — they would otherwise
+        derive different digests for the same room and defeat the ledger.
+        """
         turns = self.rebuild_turns(room_id)
         if len(turns) < self.min_turns:
-            return
+            return "", len(turns), None
         transcript = "\n".join(
             f"USER: {t['user']}" + (f"\nASSISTANT: {t['assistant']}" if t["assistant"] else "")
             for t in turns
@@ -263,8 +307,80 @@ class RoomSynthesisWatcher:
         if len(transcript) > self.max_chars:
             transcript = transcript[-self.max_chars:]
         if not transcript.strip():
+            return "", len(turns), None
+        return transcript, len(turns), self._last_source_seq(room_id)
+
+    @staticmethod
+    def _digest(transcript: str) -> str:
+        return hashlib.sha256(transcript.encode("utf-8")).hexdigest()
+
+    def backlog(self, *, limit: int | None = None, now: float | None = None) -> list[str]:
+        """Active, authorised, idle rooms whose content is not on the ledger.
+
+        A room already quiescent when the watcher starts never crosses
+        live -> idle while being observed, so the transition-only trigger can
+        never fire for it: the state it must leave is the state it is already
+        in. This enumerates the resulting blind spot explicitly instead of
+        leaving it silent, and returns newest-first so a bounded pass keeps the
+        useful end of the backlog.
+
+        ``limit=None`` means unbounded; ``limit=0`` means "nothing". The two are
+        kept distinct on purpose — an overloaded ``0`` would make "disabled" and
+        "unbounded" the same value, which is how a safety bound silently becomes
+        no bound at all.
+        """
+        current = time.time() if now is None else float(now)
+        activity = self.room_activity()
+        pending: list[tuple[float, str]] = []
+        for room_id, last_activity in activity.items():
+            if last_activity is None:
+                continue
+            if current - float(last_activity) < self.idle.threshold_seconds:
+                continue  # still hot: the transition trigger will handle it
+            transcript, _, _ = self.transcript_for(room_id)
+            if not transcript:
+                continue
+            if self.ledger is not None and self.ledger.unchanged(room_id, self._digest(transcript)):
+                continue  # already submitted — this is the dedupe that matters
+            if self.resolve_vault(room_id, transcript) is None:
+                continue  # unauthorised rooms are never synthesized
+            pending.append((float(last_activity), room_id))
+        pending.sort(reverse=True)
+        rooms = [room_id for _, room_id in pending]
+        if limit is None:
+            return rooms
+        return rooms[:max(0, int(limit))]
+
+    def recover_backlog(self, *, limit: int | None = None, now: float | None = None) -> int:
+        """Synthesize the backlog once. Returns how many rooms were handed off.
+
+        Each room goes through the SAME flush as the idle path, so the vault
+        gate and the digest gate apply unchanged. This is what makes recovering
+        an already-idle room safe: the ledger, not the pass, prevents repeats.
+        """
+        acted = 0
+        for room_id in self.backlog(limit=limit, now=now):
+            self._on_idle(room_id)
+            acted += 1
+        return acted
+
+    # -- flush ---------------------------------------------------------------
+
+    def _on_idle(self, room_id: str) -> None:
+        transcript, turn_count, source_seq = self.transcript_for(room_id)
+        if not transcript:
             return
-        transcript_sha256 = hashlib.sha256(transcript.encode("utf-8")).hexdigest()
+        transcript_sha256 = self._digest(transcript)
+        # Content gate: a target whose transcript digest is already on record has
+        # nothing new to learn. This is checked here, inside the flush, so every
+        # caller inherits it — the idle path, the backlog pass, and any future
+        # one.
+        if self.ledger is not None and self.ledger.unchanged(room_id, transcript_sha256):
+            logger.info(
+                "[room-synthesis] room %s skipped — transcript already synthesized",
+                room_id,
+            )
+            return
         vault_id = self.resolve_vault(room_id, transcript)
         # Fail-closed: BDH routes a request without vault_id to its configured
         # default, so posting anyway would land an unauthorised room transcript
@@ -283,8 +399,10 @@ class RoomSynthesisWatcher:
             "room_id": room_id,
             "queued_at": time.time(),
             "transcript_sha256": transcript_sha256,
-            "accepted_count": len(turns),
+            "accepted_count": turn_count,
         }
+        if source_seq is not None:
+            metadata["source_seq"] = source_seq
         payload = {
             "query": _SYNTHESIS_QUERY,
             "user_prompt": transcript,
@@ -293,19 +411,31 @@ class RoomSynthesisWatcher:
             "metadata": metadata,
         }
         if self.dry_run:
+            if self.ledger is not None:
+                self.ledger.record(
+                    room_id,
+                    sha=transcript_sha256,
+                    seq=source_seq,
+                    synthesis_id=metadata["synthesis_id"],
+                )
             print(
                 f"[dry-run] room {room_id}: would POST {self.bdh_url}/api/query "
-                f"source=room_synthesis vault={vault_id!r} turns={len(turns)} "
-                f"chars={len(transcript)} sha={transcript_sha256[:12]}"
+                f"source=room_synthesis vault={vault_id!r} turns={turn_count} "
+                f"chars={len(transcript)} sha={transcript_sha256[:12]} "
+                f"seq={source_seq}"
             )
             return
         threading.Thread(
-            target=self._post_query, args=(payload,), daemon=True,
+            target=self._post_query,
+            args=(payload,),
+            daemon=True,
             name=f"room-synthesis-{room_id[:12]}",
         ).start()
 
     def _post_query(self, payload: dict[str, Any]) -> None:
         body = json.dumps(payload).encode("utf-8")
+        meta = payload.get("metadata", {}) or {}
+        room_id = str(meta.get("room_id") or "")
         req = urllib.request.Request(
             f"{self.bdh_url}/api/query",
             data=body,
@@ -315,14 +445,29 @@ class RoomSynthesisWatcher:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 result = json.loads(resp.read().decode("utf-8") or "{}")
-            new = result.get("new_concepts", [])
-            activated = len(result.get("activated_notes", []))
-            print(
-                f"[room-synthesis] {payload.get('metadata', {}).get('room_id', '?')}: "
-                f"new_concepts={len(new)} activated={activated}"
-            )
         except Exception as exc:
+            # Deliberately NOT recorded: a digest written on a failed POST would
+            # drop that transcript for good. A repeat in the dispatch window is
+            # harmless because the synthesis id is deterministic over
+            # (room_id, digest) and BDH folds it into its duplicate accounting.
             print(f"[room-synthesis] POST failed: {exc}")
+            return
+        # The digest and cursor travel in the payload, so the ledger is updated
+        # from the SAME values that were submitted rather than from parallel
+        # arguments that could drift apart.
+        if self.ledger is not None and meta.get("transcript_sha256"):
+            self.ledger.record(
+                room_id,
+                sha=meta.get("transcript_sha256"),
+                seq=meta.get("source_seq"),
+                synthesis_id=meta.get("synthesis_id"),
+            )
+        new = result.get("new_concepts", [])
+        activated = len(result.get("activated_notes", []))
+        print(
+            f"[room-synthesis] {room_id or '?'}: "
+            f"new_concepts={len(new)} activated={activated}"
+        )
 
     # -- loop ----------------------------------------------------------------
 
@@ -331,6 +476,17 @@ class RoomSynthesisWatcher:
         return self.idle.scan(activity, now=now)
 
     def run_forever(self, interval_seconds: float = DEFAULT_INTERVAL) -> None:
+        # One bounded backlog pass at startup closes the blind spot described in
+        # `backlog()`: rooms that went quiescent before this process existed can
+        # never produce the observed transition. It runs exactly once, and the
+        # ledger keeps it from re-submitting on the next restart.
+        if self.backlog_limit > 0:
+            try:
+                recovered = self.recover_backlog(limit=self.backlog_limit)
+                if recovered:
+                    print(f"[room-synthesis] startup backlog: {recovered} room(s) submitted")
+            except Exception as exc:
+                logger.warning("[room-synthesis] startup backlog failed: %s", exc)
         while True:
             self.scan_once()
             time.sleep(max(1.0, interval_seconds))
@@ -358,11 +514,28 @@ def main() -> None:
     parser.add_argument("--min-turns", type=int, default=DEFAULT_MIN_TURNS)
     parser.add_argument("--max-chars", type=int, default=DEFAULT_MAX_CHARS)
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL)
+    parser.add_argument("--ledger-path", default="")
+    parser.add_argument(
+        "--backlog-limit",
+        type=int,
+        default=DEFAULT_BACKLOG_LIMIT,
+        help="rooms a startup backlog pass may submit (0 disables it)",
+    )
+    parser.add_argument(
+        "--backlog-once",
+        action="store_true",
+        help="run the backlog pass and exit; does not start the idle loop",
+    )
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+    ledger_path = (
+        args.ledger_path
+        or os.environ.get(LEDGER_ENV, "").strip()
+        or home / DEFAULT_LEDGER
+    )
     watcher = RoomSynthesisWatcher(
         db_path=args.db_path or home / "state.db",
         state_path=args.state_path or home / "bdh-room-synthesis-watcher.json",
@@ -372,8 +545,12 @@ def main() -> None:
         min_turns=args.min_turns,
         max_chars=args.max_chars,
         dry_run=args.dry_run,
+        ledger=SynthesisLedger(ledger_path),
+        backlog_limit=args.backlog_limit,
     )
-    if args.once:
+    if args.backlog_once:
+        print(f"backlog submitted: {watcher.recover_backlog(limit=args.backlog_limit)}")
+    elif args.once:
         print(f"rooms scanned: {watcher.scan_once()}")
     else:
         watcher.run_forever(args.interval)
