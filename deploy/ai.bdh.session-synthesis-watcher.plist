@@ -33,6 +33,10 @@
          qualifies. -->
     <key>BDH_SESSION_SYNTH_MIN_TURNS</key>
     <string>1</string>
+    <!-- Transcript budget. A single agentic answer measured 9858 chars, so a
+         6000-char cap could not hold one real exchange. -->
+    <key>BDH_SESSION_SYNTH_MAX_CHARS</key>
+    <string>20000</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

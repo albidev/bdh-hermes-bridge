@@ -30,6 +30,13 @@ logger = logging.getLogger(__name__)
 # a missing bridge degrades the floor rather than the whole watcher.
 _MIN_TURNS_FALLBACK = 1
 
+# Per-turn text caps. The old 1500 truncated an agentic answer mid-sentence: the
+# observed reply was 9858 chars, so a 1500-char slice kept the preamble and
+# dropped the findings. These are per FIELD, so a turn's total is up to the sum;
+# the transcript cap below is what bounds the request.
+_TURN_USER_MAX_CHARS = int(os.environ.get("BDH_SESSION_TURN_USER_MAX_CHARS", "4000") or 4000)
+_TURN_ASSISTANT_MAX_CHARS = int(os.environ.get("BDH_SESSION_TURN_ASSISTANT_MAX_CHARS", "12000") or 12000)
+
 
 def _min_turns() -> int:
     """Return the shared minimum-turn floor (bridge-owned, ``>= 1``)."""
@@ -193,7 +200,26 @@ class TranscriptIdleWatcher:
         return extract_mentions(*[t.get("user") for t in turns])
 
     def rebuild_turns(self, session_id: str) -> list[dict[str, Any]]:
-        """Reconstruct conservative pairs; tool/system rows are never buffered."""
+        """Reconstruct one turn per user message; tool/system rows are dropped.
+
+        An agentic turn is NOT a user/assistant pair. Between two user messages
+        the assistant appears many times, interleaved with tool results:
+
+            user -> assistant(finish=tool_calls, text="") -> tool -> assistant(...)
+                 -> ... -> assistant(finish=stop, text=<the real answer>)
+
+        Taking the FIRST assistant as the answer therefore captured an empty
+        tool-call announcement and discarded the reply that arrives dozens of
+        rows later. Observed on a 52-message session: the turn's actual answer
+        was 9858 chars at row 39, and the transcript submitted was 479 chars
+        containing neither of the two real answers — enough to make the
+        extractor report "no concepts" on content that was full of them.
+
+        So a turn accumulates assistant text until the next user message, and the
+        transcript keeps the substance of the exchange rather than its opening
+        line. ``finish_reason == "length"`` still marks a truncated response and
+        is skipped.
+        """
         db_path, _ = self._locate_session(session_id, self.all_db_paths())
         target_db = db_path or self.db_path
         try:
@@ -206,20 +232,37 @@ class TranscriptIdleWatcher:
                 ).fetchall()
         except sqlite3.Error:
             return []
+
         turns: list[dict[str, Any]] = []
-        pending_user = None
+        pending_user: str | None = None
+        parts: list[str] = []
+
+        def _flush() -> None:
+            if pending_user and parts:
+                turns.append({
+                    "user": pending_user[:_TURN_USER_MAX_CHARS],
+                    "assistant": "\n".join(parts)[:_TURN_ASSISTANT_MAX_CHARS],
+                    "vault_id": None,
+                    "context_only": True,
+                })
+
         for role, content, finish_reason in rows:
             if role == "user":
+                # A new user message closes the previous turn.
+                _flush()
                 pending_user = self._text(content)
-            elif role == "assistant" and pending_user:
-                if str(finish_reason or "").lower() != "length":
-                    turns.append({
-                        "user": pending_user[:1500],
-                        "assistant": self._text(content)[:1500],
-                        "vault_id": None,
-                        "context_only": True,
-                    })
-                pending_user = None
+                parts = []
+            elif role == "assistant" and pending_user is not None:
+                text = self._text(content)
+                if str(finish_reason or "").lower() == "length":
+                    # Truncated: the tail is missing, so the text is unreliable
+                    # as an answer. Keep accumulating in case a later complete
+                    # response arrives for the same turn.
+                    continue
+                if text:
+                    parts.append(text)
+        _flush()
+
         vault_id = self._resolve_recovery_vault(
             turns, session_id=session_id, db_paths=self.all_db_paths(),
         )
