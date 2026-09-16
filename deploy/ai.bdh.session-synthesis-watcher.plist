@@ -37,6 +37,12 @@
          6000-char cap could not hold one real exchange. -->
     <key>BDH_SESSION_SYNTH_MAX_CHARS</key>
     <string>20000</string>
+    <!-- Last-submitted transcript digest per session, so a startup backlog pass
+         can recover a session the live->idle trigger can no longer reach without
+         re-submitting on every restart. A SEPARATE file from the room watcher's:
+         both processes cache their ledger and rewrite it whole. -->
+    <key>BDH_SESSION_SYNTHESIS_LEDGER_FILE</key>
+    <string>__HERMES_HOME__/bdh-session-synthesis-ledger.json</string>
   </dict>
   <key>RunAtLoad</key>
   <true/>

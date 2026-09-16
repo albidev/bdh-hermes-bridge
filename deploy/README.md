@@ -77,6 +77,35 @@ New messages change the digest and reopen the room.
 PYTHONUNBUFFERED=1 python room_synthesis_watcher.py --backlog-once --dry-run
 ```
 
+## The session watcher has the same pass, and why
+
+The **session** watcher had the same blind spot, one layer down: a session whose
+`live → idle` crossing happened without anyone acting on it was unreachable
+forever. Two ways that happens — it went idle while ineligible (too few turns, or
+no authorised vault, so the crossing was consumed and it stays `idle`), or it
+went idle while this process was not running (so it has no recorded state at
+all). Neither is fixed by waiting, because neither will produce another crossing.
+
+Measured on the live instance before the fix: **3 sessions** in that state, one of
+them 12 turns of client work — against 11 sessions the actor gate correctly
+refuses. So the backlog pass is bounded (`--backlog-limit`, default 3) and
+newest-first, and it applies the actor gate and the minimum-turn floor before the
+ledger, so recovery can never submit something the live path would refuse.
+
+```bash
+# Inspect the session backlog without posting anything.
+PYTHONUNBUFFERED=1 python session_synthesis_watcher.py --backlog-once --dry-run
+```
+
+**The two watchers use SEPARATE ledger files.** `SynthesisLedger` caches its
+contents at first load and rewrites the whole file on every record, so two
+processes sharing one file would overwrite each other's entries:
+
+| watcher | env var | default |
+|---|---|---|
+| room | `BDH_SYNTHESIS_LEDGER_FILE` | `$HERMES_HOME/bdh-synthesis-ledger.json` |
+| session | `BDH_SESSION_SYNTHESIS_LEDGER_FILE` | `$HERMES_HOME/bdh-session-synthesis-ledger.json` |
+
 ## Verifying a running watcher
 
 The idle watcher fires only on a **live → idle** transition, and

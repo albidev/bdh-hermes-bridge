@@ -17,9 +17,27 @@ from pathlib import Path
 from typing import Any
 
 from session_idle import SessionIdleWatcher
+from synthesis_ledger import SynthesisLedger
 from synthesis_scope import extract_mentions, load_policy, resolve_synthesis_vault
 
 logger = logging.getLogger(__name__)
+
+# A separate ledger file from the room watcher's. `SynthesisLedger` caches its
+# contents at first load and rewrites the whole file on every record, so two
+# PROCESSES sharing one file would overwrite each other's entries — the room
+# watcher and this one are separate daemons, so they must not share.
+LEDGER_ENV = "BDH_SESSION_SYNTHESIS_LEDGER_FILE"
+DEFAULT_LEDGER = "bdh-session-synthesis-ledger.json"
+
+# How many already-idle sessions a startup pass may submit. Bounded on purpose:
+# each recovery is a synthesis on the local model (minutes), and recovery must
+# never become an unbounded storm on a long-lived backlog.
+DEFAULT_BACKLOG_LIMIT = 3
+
+# A ceiling on how many candidates the backlog pass will even consider, so a
+# machine with years of history does not read and hash thousands of transcripts
+# on every start. Newest-first, so the cap keeps the useful end.
+_BACKLOG_SCAN_LIMIT = 200
 
 # The minimum-turn floor is OWNED by the bridge, not duplicated here. Both paths
 # must agree: the standalone watcher serves TUI/Mission Control sessions and the
@@ -96,10 +114,16 @@ class TranscriptIdleWatcher:
         state_path: str | os.PathLike[str],
         threshold_seconds: float = 300.0,
         recover_session_id: str | None = None,
+        ledger: "SynthesisLedger | None" = None,
+        backlog_limit: int = DEFAULT_BACKLOG_LIMIT,
+        dry_run: bool = False,
     ) -> None:
         self.db_path = Path(db_path)
         self.recover_session_id = recover_session_id
         self._recovery_seeded = False
+        self.ledger = ledger
+        self.backlog_limit = max(0, int(backlog_limit))
+        self.dry_run = dry_run
         # Profile-scoped databases of the same Hermes home. A session served by
         # a secondary profile is stored in that profile's own state.db, so a
         # watcher pinned to the default database would never see it.
@@ -297,6 +321,95 @@ class TranscriptIdleWatcher:
         return turns[-200:]
 
 
+    def _digest_for(self, turns: list[dict[str, Any]]) -> str | None:
+        """Digest the transcript this session WOULD submit.
+
+        Uses the bridge's own builder, so the digest matches byte for byte what
+        actually goes on the wire. Re-deriving the shape here would let a
+        formatting change silently break the ledger's dedupe.
+        """
+        if not turns:
+            return None
+        bridge = self._ensure_bridge()
+        try:
+            transcript, _, _ = bridge._build_session_transcript(turns)
+        except Exception:
+            return None
+        if not transcript:
+            return None
+        import hashlib
+
+        return hashlib.sha256(transcript.encode("utf-8")).hexdigest()
+
+    def _ensure_bridge(self):
+        if self.bridge is None:
+            import importlib
+
+            self.bridge = importlib.import_module("__init__")
+        return self.bridge
+
+    def _eligible(self, session_id: str) -> list[dict[str, Any]] | None:
+        """Turns for a session that may be synthesized, or None.
+
+        Applies the same two gates as the idle path — the actor gate and the
+        minimum-turn floor — plus the ledger, so a recovery pass can never submit
+        something the live path would refuse, or repeat something already sent.
+        """
+        turns = self.rebuild_turns(session_id)
+        if len(turns) < _min_turns():
+            return None
+        if not turns[0].get("vault_id"):
+            return None
+        if self.ledger is not None:
+            digest = self._digest_for(turns)
+            if digest and self.ledger.unchanged(session_id, digest):
+                return None
+        return turns
+
+    def backlog(self, *, limit: int | None = None, now: float | None = None) -> list[str]:
+        """Idle, authorised sessions whose content is not on the ledger.
+
+        The transition-only trigger cannot reach a session whose live -> idle
+        crossing happened while nobody was watching: either it went idle with
+        nothing eligible (and stays idle forever), or it went idle while this
+        process was not running (so it has no recorded state at all). In both, the
+        content is lost in silence, indistinguishable from "nothing to learn".
+
+        ``limit=None`` is unbounded; ``limit=0`` means nothing. Kept distinct: an
+        overloaded ``0`` would make "disabled" and "unbounded" the same value.
+        """
+        current = time.time() if now is None else float(now)
+        pending: list[tuple[float, str]] = []
+        for session_id, last_activity in self.session_activity().items():
+            if last_activity is None:
+                continue
+            if current - float(last_activity) < self.idle.threshold_seconds:
+                continue  # still active: the transition trigger owns it
+            pending.append((float(last_activity), session_id))
+        pending.sort(reverse=True)
+        candidates = [session_id for _, session_id in pending[:_BACKLOG_SCAN_LIMIT]]
+
+        ready: list[str] = []
+        for session_id in candidates:
+            if self._eligible(session_id) is None:
+                continue
+            ready.append(session_id)
+            if limit is not None and len(ready) >= max(0, int(limit)):
+                break
+        return ready if limit is None else ready[: max(0, int(limit))]
+
+    def recover_backlog(self, *, limit: int | None = None, now: float | None = None) -> int:
+        """Synthesize the backlog once. Returns how many sessions were handed off.
+
+        Each goes through the same `_on_idle` as the live path, so the actor gate,
+        the floor and the digest gate apply unchanged.
+        """
+        acted = 0
+        for session_id in self.backlog(limit=limit, now=now):
+            self._on_idle(session_id)
+            acted += 1
+        return acted
+
     def _on_idle(self, session_id: str) -> None:
         turns = self.rebuild_turns(session_id)
         if len(turns) < _min_turns():
@@ -310,12 +423,37 @@ class TranscriptIdleWatcher:
                 "[synthesis-scope] session %s skipped — no authorised vault", session_id
             )
             return
-        if self.bridge is None:
-            import importlib
-            self.bridge = importlib.import_module("__init__")
-        with self.bridge._bdh_state_lock:
-            self.bridge._session_buffers[session_id] = turns
-        self.bridge._flush_session_synthesis(session_id, final=False, wait=True)
+        # The idle trigger can fire more than once for the same content (a session
+        # that goes quiet, is resumed, and goes quiet again without new turns).
+        # The digest gate makes that idempotent instead of submitting twice.
+        digest = self._digest_for(turns)
+        if digest and self.ledger is not None and self.ledger.unchanged(session_id, digest):
+            logger.info(
+                "[synthesis-scope] session %s skipped — transcript already synthesized",
+                session_id,
+            )
+            return
+        bridge = self._ensure_bridge()
+        if self.dry_run:
+            print(
+                f"[dry-run] session {session_id}: would POST source=session_synthesis "
+                f"vault={turns[0].get('vault_id')!r} turns={len(turns)} "
+                f"sha={(digest or '')[:12]}"
+            )
+            return
+        with bridge._bdh_state_lock:
+            bridge._session_buffers[session_id] = turns
+
+        # Record only after BDH accepted: a digest written on a failed POST would
+        # drop that transcript permanently, whereas a repeat in the dispatch
+        # window is harmless (the synthesis id is deterministic over the content).
+        def _record(sha: str) -> None:
+            if self.ledger is not None:
+                self.ledger.record(session_id, sha=sha)
+
+        bridge._flush_session_synthesis(
+            session_id, final=False, wait=True, on_success=_record,
+        )
 
     def scan_once(self, *, now: float | None = None) -> int:
         activity = self.session_activity()
@@ -328,9 +466,23 @@ class TranscriptIdleWatcher:
         return self.idle.scan(activity, now=now)
 
     def run_forever(self, interval_seconds: float = 60.0) -> None:
+        # One bounded backlog pass at startup closes the blind spot described in
+        # `backlog()`. It runs exactly once, and the ledger keeps it from
+        # re-submitting on the next restart.
+        if self.backlog_limit > 0:
+            try:
+                recovered = self.recover_backlog(limit=self.backlog_limit)
+                if recovered:
+                    print(f"[session-synthesis] startup backlog: {recovered} session(s) submitted")
+            except Exception as exc:
+                logger.warning("[session-synthesis] startup backlog failed: %s", exc)
         while True:
             self.scan_once()
             time.sleep(max(1.0, interval_seconds))
+
+
+def _default_ledger_path(home: Path, override: str = "") -> Path:
+    return Path(override or os.environ.get(LEDGER_ENV, "").strip() or home / DEFAULT_LEDGER)
 
 
 def main() -> None:
@@ -340,7 +492,20 @@ def main() -> None:
     parser.add_argument("--threshold", type=float, default=300.0)
     parser.add_argument("--interval", type=float, default=60.0)
     parser.add_argument("--recover-session-id", default="")
+    parser.add_argument("--ledger-path", default="")
+    parser.add_argument(
+        "--backlog-limit",
+        type=int,
+        default=DEFAULT_BACKLOG_LIMIT,
+        help="sessions a startup backlog pass may submit (0 disables it)",
+    )
+    parser.add_argument(
+        "--backlog-once",
+        action="store_true",
+        help="run the backlog pass and exit; does not start the idle loop",
+    )
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
     watcher = TranscriptIdleWatcher(
@@ -348,8 +513,13 @@ def main() -> None:
         state_path=args.state_path or home / "bdh-session-synthesis-watcher.json",
         threshold_seconds=args.threshold,
         recover_session_id=args.recover_session_id or None,
+        ledger=SynthesisLedger(_default_ledger_path(home, args.ledger_path)),
+        backlog_limit=args.backlog_limit,
+        dry_run=args.dry_run,
     )
-    if args.once:
+    if args.backlog_once:
+        print(f"backlog submitted: {watcher.recover_backlog(limit=args.backlog_limit)}")
+    elif args.once:
         print(watcher.scan_once())
     else:
         watcher.run_forever(args.interval)
