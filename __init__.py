@@ -148,9 +148,16 @@ _SESSION_SYNTH_ENABLED = os.environ.get("BDH_SESSION_SYNTH_ENABLED", "").lower()
     "1", "true", "yes", "on",
 )
 # A session is only worth synthesising once it has at least this many written
-# turns — a 1-turn session is already covered by the per-turn write path.
+# turns. One completed exchange is enough: the durable content is the CONCEPT,
+# and a well-answered direct question carries one. The original justification for
+# 3 ("a 1-turn session is already covered by the per-turn write path") does not
+# hold here — that path is gated behind BDH_QUERY_REWRITE_ENABLED, which is
+# opt-in and unset, so store_candidate is never decided and nothing is written
+# per turn. With the actor gate already filtering which sessions qualify, a low
+# floor costs little and a high one silently drops exactly the sessions worth
+# keeping.
 _SESSION_SYNTH_MIN_TURNS = _bounded_int(
-    os.environ.get("BDH_SESSION_SYNTH_MIN_TURNS", "3"), 3, maximum=100
+    os.environ.get("BDH_SESSION_SYNTH_MIN_TURNS", "1"), 1, maximum=100
 )
 # Cap the transcript we feed to the synthesis so a long session cannot blow up
 # the BDH request / neurogenesis context.
