@@ -56,6 +56,21 @@ def test_default_profile_topic_is_never_routed_to_the_client_vault():
     ) is None
 
 
+def test_unknown_mention_iterator_cannot_fall_back_to_core():
+    policy = SynthesisPolicy(
+        allow_default_core_sessions=True,
+        mention_prefixes={"client-a": "vault-a"},
+        allow_room_registry=False,
+    )
+    assert resolve_synthesis_vault(
+        session_profile="default",
+        session_mentions=iter(["@unknown"]),
+        trusted_default_session=True,
+        policy=policy,
+        registry={},
+    ) is None
+
+
 def test_serving_profile_does_not_authorise_a_one_to_one_session():
     """A serving profile is not an authorisation for a 1:1 session.
 
@@ -193,6 +208,59 @@ def test_watcher_rebuilds_conservative_pairs(tmp_path, monkeypatch):
         {"user": "decision two", "assistant": "answer two", "vault_id": None, "context_only": True},
         {"user": "decision three", "assistant": "answer three", "vault_id": None, "context_only": True},
     ]
+
+
+def test_watcher_routes_opted_in_default_profile_session_to_core(tmp_path, monkeypatch):
+    db_path = tmp_path / "state.db"
+    _db(db_path, profile_name="default")
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(
+        '{"version": 2, "allow_default_core_sessions": true, '
+        '"allow_room_registry": false}', encoding="utf-8",
+    )
+    monkeypatch.setenv("BDH_SYNTHESIS_POLICY_FILE", str(policy_file))
+    watcher = TranscriptIdleWatcher(db_path=db_path, state_path=tmp_path / "idle.json")
+
+    assert [turn["vault_id"] for turn in watcher.rebuild_turns("s1")] == ["core"] * 3
+
+
+@pytest.mark.parametrize("source,profile,user_text,expected", [
+    ("tui", "default", "ask @client-a about", "vault-a"),
+    ("tui", "default", "ask @unknown about", None),
+    ("mission-control", "client-a", "decision", None),
+    ("cron", "default", "decision", None),
+])
+def test_default_core_opt_in_never_overrides_actor_or_source(
+    tmp_path, monkeypatch, source, profile, user_text, expected,
+):
+    db_path = tmp_path / "state.db"
+    _db(db_path, source=source, profile_name=profile, user_text=user_text)
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text(json.dumps({
+        "allow_default_core_sessions": True,
+        "mention_prefixes": {"client-a": "vault-a"},
+        "profile_vaults": {"client-a": "vault-a"},
+        "allow_room_registry": False,
+    }), encoding="utf-8")
+    monkeypatch.setenv("BDH_SYNTHESIS_POLICY_FILE", str(policy_file))
+    watcher = TranscriptIdleWatcher(db_path=db_path, state_path=tmp_path / "idle.json")
+
+    assert {turn["vault_id"] for turn in watcher.rebuild_turns("s1")} == {expected}
+
+
+def test_default_core_opt_in_rejects_secondary_database(tmp_path, monkeypatch):
+    home = tmp_path / ".hermes"
+    secondary = home / "profiles" / "other" / "state.db"
+    secondary.parent.mkdir(parents=True)
+    _db(home / "state.db", session_id="primary", profile_name="default")
+    _db(secondary, session_id="secondary", profile_name="default")
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text('{"allow_default_core_sessions": true}', encoding="utf-8")
+    monkeypatch.setenv("BDH_SYNTHESIS_POLICY_FILE", str(policy_file))
+    watcher = TranscriptIdleWatcher(db_path=home / "state.db", state_path=tmp_path / "idle.json")
+
+    assert {turn["vault_id"] for turn in watcher.rebuild_turns("primary")} == {"core"}
+    assert {turn["vault_id"] for turn in watcher.rebuild_turns("secondary")} == {None}
 
 
 def test_watcher_skips_a_profile_served_session_without_an_addressed_actor(tmp_path, monkeypatch):

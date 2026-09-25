@@ -200,22 +200,22 @@ class TranscriptIdleWatcher:
         return str(value or "").strip()
 
     @staticmethod
-    def _locate_session(session_id: str, db_paths: list[Path]) -> tuple[Path | None, str | None]:
-        """Return (db_path, serving profile_name) for a session, if known."""
+    def _locate_session(session_id: str, db_paths: list[Path]) -> tuple[Path | None, str | None, str | None]:
+        """Return (database, serving profile, source) for a persisted session."""
         for db_path in db_paths:
             try:
                 with closing(sqlite3.connect(
                     f"file:{db_path}?mode=ro", uri=True, timeout=1.0,
                 )) as db:
                     row = db.execute(
-                        "SELECT profile_name FROM sessions WHERE id = ?",
+                        "SELECT profile_name, source FROM sessions WHERE id = ?",
                         (session_id,),
                     ).fetchone()
             except sqlite3.Error:
                 continue
             if row is not None:
-                return db_path, (str(row[0]).strip() if row[0] else None)
-        return None, None
+                return db_path, (str(row[0]).strip() if row[0] else None), str(row[1] or "")
+        return None, None, None
 
     @classmethod
     def _resolve_recovery_vault(
@@ -233,12 +233,18 @@ class TranscriptIdleWatcher:
         the fallback. Neither inspects the transcript prose, so a session that
         merely talks about a client cannot be routed into that client's vault.
         """
-        profile_name = None
+        db_path, profile_name, source = (None, None, None)
         if session_id and db_paths:
-            _, profile_name = cls._locate_session(session_id, db_paths)
+            db_path, profile_name, source = cls._locate_session(session_id, db_paths)
+        mentions = cls._mentions_from_turns(turns)
         return resolve_synthesis_vault(
             session_profile=profile_name,
-            session_mentions=cls._mentions_from_turns(turns),
+            session_mentions=mentions,
+            trusted_default_session=bool(
+                db_paths and db_path == db_paths[0]
+                and profile_name == "default"
+                and source in _PROFILE_SERVED_SOURCES
+            ),
             policy=load_policy(),
         )
 
@@ -268,7 +274,7 @@ class TranscriptIdleWatcher:
         line. ``finish_reason == "length"`` still marks a truncated response and
         is skipped.
         """
-        db_path, _ = self._locate_session(session_id, self.all_db_paths())
+        db_path, _, _ = self._locate_session(session_id, self.all_db_paths())
         target_db = db_path or self.db_path
         try:
             with closing(self._db(target_db)) as db:

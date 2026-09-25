@@ -21,7 +21,9 @@ target from explicit actor signals only:
    profile contradicts it;
 3. the serving profile name, matched against configured profile prefixes;
 4. the room's non-default member profiles, when they agree on one vault;
-5. otherwise -> ``None``: no synthesis. There is deliberately no fallback.
+5. a **verified default-profile 1:1 session**, only when the local policy
+   explicitly opts into Core and the watcher found it in the default SessionDB;
+6. otherwise -> ``None``: no synthesis. There is deliberately no implicit fallback.
 
 Signals 2-4 describe *who ran the session*. Signal 1 describes *who was
 addressed*, and is what catches a session whose runner profile is unrelated to
@@ -74,12 +76,14 @@ class SynthesisPolicy:
     mention_prefixes: Mapping[str, str] = field(default_factory=dict)
     allow_room_registry: bool = True
     room_registry_path: str = ""
+    allow_default_core_sessions: bool = False
 
     @property
     def configured(self) -> bool:
         return bool(
             self.profile_vaults
             or self.mention_prefixes
+            or self.allow_default_core_sessions
             or (self.allow_room_registry and self.room_registry_path)
         )
 
@@ -143,6 +147,7 @@ def load_policy() -> SynthesisPolicy:
         mention_prefixes=_normalise_prefix_map(data.get("mention_prefixes"), "mention_prefixes"),
         allow_room_registry=bool(data.get("allow_room_registry", True)),
         room_registry_path=str(data.get("room_registry_path") or "").strip(),
+        allow_default_core_sessions=data.get("allow_default_core_sessions") is True,
     )
 
 
@@ -244,6 +249,7 @@ def resolve_synthesis_vault(
     room_members: Sequence[Any] | None = None,
     policy: SynthesisPolicy | None = None,
     registry: Mapping[str, str] | None = None,
+    trusted_default_session: bool = False,
 ) -> str | None:
     """Return the authorised vault for a synthesis target, or ``None``.
 
@@ -258,6 +264,7 @@ def resolve_synthesis_vault(
     active = policy if policy is not None else load_policy()
     if not active.configured:
         return None
+    mentions = tuple(session_mentions or ())
 
     if registry is not None:
         # The policy decides whether the room registry is an authority at all.
@@ -278,7 +285,7 @@ def resolve_synthesis_vault(
         registry_vault = rooms[room_key]
         # An addressed actor outranks the room's registry entry, but a
         # contradiction is never silently resolved in either direction.
-        addressed = vault_for_mentions(session_mentions or (), active)
+        addressed = vault_for_mentions(mentions, active)
         if addressed is not None:
             if addressed == registry_vault:
                 return addressed
@@ -311,16 +318,24 @@ def resolve_synthesis_vault(
 
     # An addressed actor is the strongest signal: it names who was asked to do
     # the work, independently of the profile that served the run.
-    addressed = vault_for_mentions(session_mentions or (), active)
+    addressed = vault_for_mentions(mentions, active)
     if addressed is not None:
         return addressed
 
-    # No serving-profile fallback here, and that is the point of this function's
-    # actor model. A profile name says which agent RAN the turn, not what the
-    # work belongs to: a chat opened in a client profile to work on Hermes/BDH
-    # is served by that profile and would be filed into the client vault on
-    # every idle pass, with no residual signal distinguishing it from real
-    # client work. Profile identity stays authoritative in the room branch
+    # An explicitly opted-in default-profile 1:1 session may write to Core,
+    # but only when its caller verified the session lives in the default DB.
+    # Unknown/ambiguous @mentions and rooms must never fall back to Core.
+    if (active.allow_default_core_sessions and trusted_default_session
+            and str(session_profile or "").strip().casefold() == "default"
+            and not mentions and not room_key and not room_members):
+        return "core"
+
+    # No serving-profile fallback for client vaults, and that is the point of
+    # this function's actor model. A client profile says which agent RAN the
+    # turn, not what the work belongs to: a chat opened in a client profile to
+    # work on Hermes/BDH is served by that profile and would be filed into the
+    # client vault on every idle pass, with no residual signal distinguishing it
+    # from real client work. Profile identity stays authoritative in the room branch
     # above, where it is corroborated by the registry entry and the full
     # membership; on its own it is not an authorisation.
     #

@@ -57,6 +57,24 @@ The policy file's default path is anchored to the module directory, so a
 daemon whose working directory differs still finds it. Prefer an explicit
 `BDH_SYNTHESIS_POLICY_FILE` anyway.
 
+### Core sessions (explicit opt-in)
+
+The default Hermes profile is not a client actor. To let its idle TUI/Mission
+Control sessions stage candidates in the **Core** vault, set
+`"allow_default_core_sessions": true` in the local gitignored policy file.
+This applies only when the session is found in the default `state.db`, has
+`profile_name=default`, and has source `tui` or `mission-control`. An addressed
+`@handle` takes precedence; unknown/ambiguous handles, secondary profile
+DBs, rooms, and cron sessions never fall back to Core. The flag defaults to
+false; it does not enable an implicit target for other profiles.
+
+Back up the policy before enabling it, then inspect
+`session_synthesis_watcher.py --dry-run --backlog-once --backlog-limit 3`
+before restarting the watcher. Startup recovery can saturate the BDH API
+until its bounded batch completes; Curate may time out temporarily. Verify
+both the Core synthesis audit and `pending_review` candidates afterward —
+the ledger alone only proves BDH accepted the request.
+
 ## Why the room watcher has a recovery pass
 
 The idle trigger is a **live → idle transition**, and that is correct for
