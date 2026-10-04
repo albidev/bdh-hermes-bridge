@@ -50,8 +50,8 @@ skip the flush entirely when nothing is authorized. That requires:
 - **`BDH_SYNTHESIS_LEDGER_FILE`** — room watcher only. Records the transcript
   digest last submitted per room, so re-synthesis is decided by CONTENT rather
   than by an observed transition. Defaults to
-  `$HERMES_HOME/bdh-synthesis-ledger.json`. Delete it to force one full
-  re-synthesis pass.
+  `$HERMES_HOME/bdh-synthesis-ledger.json`. Do not erase a production ledger to
+  force replay; use an explicit new scratch ledger for inspection.
 
 The policy file's default path is anchored to the module directory, so a
 daemon whose working directory differs still finds it. Prefer an explicit
@@ -135,10 +135,19 @@ watcher is idle. Note that `--once` alone emits nothing for an already-idle
 room by design — use `--backlog-once` to reach that case.
 
 ```bash
-PYTHONUNBUFFERED=1 python room_synthesis_watcher.py --dry-run --once   # no writes
+BDH_SYNTHESIS_LEDGER_FILE=/path/to/scratch/room-dryrun.json \
+  PYTHONUNBUFFERED=1 python room_synthesis_watcher.py --dry-run --once   # no POST; scratch ledger is written
 ```
 
 `--dry-run` prints the exact payload it would post, including the resolved
 `vault_id`, without contacting BDH. In dry-run mode the ledger IS written (the
 pass is simulated, not skipped), so a dry-run then suppresses a real pass for
-the same content — clear the ledger file if you want to repeat it.
+the same content. Use a fresh scratch ledger path to repeat; never clear the production ledger for a dry-run.
+
+## Dry-run contract and isolated onboarding
+
+Both standalone watchers have separate persistent digest ledgers in normal operation. Session dry-run returns before POST **and before ledger recording**; room dry-run records its digest even without a POST. In-process epoch guards are a third mechanism, not the session watcher's ledger. Always dry-run copied test DB/policy with explicit scratch ledger paths.
+
+Semantic vault hints are retrieval-only; deterministic hook scope authorizes per-turn writes, and the actor policy authorizes standalone watcher synthesis. No topic match grants write authority. New plugin code/flags require a new owning process; isolated discovery/stats does not require any production restart or Mission Control registry.
+
+Read [quickstart](../docs/quickstart.md), [operations](../docs/operations.md), [compatibility](../docs/compatibility.md) and [session synthesis](../docs/session-synthesis.md) before deploying watchers. The service templates above are advanced macOS recipes, not prerequisites for the bridge.

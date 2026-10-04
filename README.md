@@ -8,7 +8,9 @@ Bidirectional plugin bridge between [Hermes Agent](https://github.com/NousResear
 
 The plugin connects Hermes' real conversations to BDH's neural knowledge graph and exposes BDH context as native Hermes tools. It learns from actual usage — not fabricated bridge queries.
 
-> **Status:** standalone Hermes plugin, version **0.11.0**.
+> **Status:** experimental standalone Hermes plugin, version **0.11.0**.
+
+Start with [isolated onboarding](docs/quickstart.md), then [operations/privacy](docs/operations.md) and [compatibility](docs/compatibility.md); use the [alpha checklist](docs/alpha-checklist.md) before rollout. Discovery/stats verification does not run conversation hooks. **Enabling the plugin is not read-only**; rewrite/synthesis flags are not universal write-disable switches.
 
 ## What it does
 
@@ -53,9 +55,9 @@ Automatic retrieval uses the vault's Hybrid index: Chroma cosine KNN plus BM25 l
 
 When `BDH_SESSION_SYNTH_ENABLED=true`, the bridge buffers safe turns and submits one bounded synthesis request when Hermes finalizes or resets a session. Turns that were written directly to BDH (`store_candidate=true`) are buffered as **accepted** turns after the write succeeds. Turns that are not durable enough for a direct write (`store_candidate=false`) but are otherwise safe and complete are buffered as **context-only** turns so later turns in the same session keep their causal context. Failed/truncated responses, blacklisted prompts, cron messages without explicit opt-in, unresolved vault scope, and empty content are excluded from the buffer.
 
-Since v0.11.0, the bridge also handles Hermes' `on_session_idle` event with an **epoch-aware, non-destructive idle flush**: when a session goes idle with enough buffered turns, the bridge stages one candidate synthesis for the current epoch without resetting the session. A later turn starts a new epoch, eligible for its own idle/finalize flush. Finalize/reset remain authoritative fallbacks.
+Since v0.11.0, the bridge also uses a bridge-owned idle watcher (no Hermes `on_session_idle` registration) with an **epoch-aware, non-destructive idle flush**: when a session goes idle with enough buffered turns, the bridge stages one candidate synthesis for the current epoch without resetting the session. A later turn starts a new epoch, eligible for its own idle/finalize flush. Finalize/reset remain authoritative fallbacks.
 
-The request extracts durable decisions, architecture choices, and lessons learned instead of copying transient conversation noise. The resolved vault from the semantic router is propagated to the per-turn write and the final synthesis; mixed-vault sessions are rejected. The synthesis is asynchronous and never changes the current answer. Each synthesis request carries audit metadata (`synthesis_id`, `session_id`, `queued_at`, `transcript_sha256`, `accepted_count`, `context_only_count`) so downstream consumers can correlate requests without storing the raw transcript. See the detailed [session-end synthesis documentation](docs/session-synthesis.md), including lifecycle, scope isolation, configuration, model selection, and verification.
+The request extracts durable decisions, architecture choices, and lessons learned instead of copying transient conversation noise. The deterministic turn scope is propagated to per-turn writes and synthesis; semantic overlay hints are retrieval-only and are not write authority. Mixed-vault buffers are rejected. The synthesis is asynchronous and never changes the current answer. Each synthesis request carries audit metadata (`synthesis_id`, `session_id`, `queued_at`, `transcript_sha256`, `accepted_count`, `context_only_count`) so downstream consumers can correlate requests without storing the raw transcript. See the detailed [session-end synthesis documentation](docs/session-synthesis.md), including lifecycle, scope isolation, configuration, model selection, and verification.
 
 ### Query classification + rewrite pipeline (v0.8.0, opt-in)
 
@@ -79,7 +81,7 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 ```
 
 - **Read** (`pre_llm_call` automatic retrieval): only when `should_retrieve=true`; uses `search_query` if provided, otherwise `query`.
-- **Write** (`post_api_request` learning): only when `store_candidate=true`; uses `query`, never retrieval-only variants.
+- **Write** (`post_api_request` learning): `store_candidate=false` skips direct writes; a missing classification can still use the legacy write path. Canonical `query`, not retrieval-only variants, is the seed.
 - **Compatibility:** legacy `should_query` payloads are accepted and map to both flags, but new providers must emit schema v2.
 - **Safety:** malformed v2 booleans are rejected; values such as the string `"false"` never fail open to `true`.
 
@@ -120,8 +122,11 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 | `BDH_CONTEXT_MSG_MAX_CHARS` | `200` | Max chars per context message |
 | `BDH_REWRITE_MAX_VARIANTS` | `10` (v2 cap: `3`) | Legacy/provider variant bound; v2 never sends more than 3 retrieval variants |
 | `BDH_SESSION_SYNTH_ENABLED` | `false` | Opt-in for cross-session synthesis on Hermes session finalization/reset |
-| `BDH_SESSION_SYNTH_MIN_TURNS` | `3` | Minimum written turns before a session is worth synthesising |
-| `BDH_SESSION_SYNTH_MAX_CHARS` | `6000` | Max characters of transcript fed to the synthesis LLM |
+| `BDH_SESSION_SYNTH_MIN_TURNS` | `1` | Minimum eligible buffered turns (accepted or context-only) |
+| `BDH_SESSION_SYNTH_MAX_CHARS` | `20000` | Maximum transcript characters; operator-selected provider |
+| `BDH_SESSION_TURN_USER_MAX_CHARS` | `4000` | Per-turn user-text cap |
+| `BDH_SESSION_TURN_ASSISTANT_MAX_CHARS` | `12000` | Per-turn assistant-text cap |
+| `BDH_SESSION_SYNTH_TIMEOUT` | `300` | Synthesis request timeout, clamped 60–600s |
 | `BDH_VAULT_SCOPE_MAP_FILE` | empty | Path to a JSON identity-to-vault map |
 | `BDH_VAULT_SCOPE_MAP_JSON` | empty | Inline JSON identity-to-vault map |
 
@@ -258,7 +263,6 @@ A blacklisted prompt skips both automatic read retrieval and the asynchronous wr
 The plugin registers `pre_llm_call` to capture the current user message and `post_api_request` to inspect each API response. Only a substantial final response is sent back to BDH:
 
 - `finish_reason == "stop"`
-- assistant content is at least **200 characters**
 - assistant content is non-empty
 - a user message was captured by `pre_llm_call`
 
@@ -297,13 +301,7 @@ Example tool input:
 }
 ```
 
-The tool returns a compact JSON result containing:
-
-- up to 10 activated notes with scores
-- BDH's generated response
-- newly created concepts
-- Hebbian update count
-- neuron and synapse counts
+The tool returns compact `found`, `response` and an instruction to synthesize the evidence without exposing graph internals. It does not expose the raw activated-note/synapse arrays in the final tool result. `bdh_query` uses the learning path; use `bdh_stats` for read-only verification.
 
 ## Echo-loop prevention
 
@@ -327,13 +325,13 @@ BDH requests are made through a small HTTP helper with configurable base URL and
 
 | Path | Timeout | Attempts | Timeout retry |
 |---|---:|---:|---|
-| Rewrite LLM (classify + rewrite) | 15s | 1 | N/A — falls back to mechanical gate |
+| Rewrite LLM (classify + rewrite) | 15s per provider | 1 per candidate | Advances through configured provider chain, then mechanical fallback |
 | Automatic read hook | 2s | 1 | N/A |
 | Automatic write hook | 30s | 2 total | No |
-| `bdh_query` tool | 30s | 2 total | No |
-| `bdh_stats` tool | 5s | 1 | N/A |
+| `bdh_query` tool | 60s | 2 total | Wrapped URL timeouts suppressed; direct timeout limitation below |
+| `bdh_stats` tool | 10s | 2 total | Read-only GET may retry |
 
-The POST `/api/query` endpoint is non-idempotent: BDH may have processed a request even if the client timed out. Therefore timeout errors are not retried, preventing duplicate Hebbian updates and duplicate neurogenesis.
+The POST `/api/query` endpoint is non-idempotent: BDH may have processed a request even if the client timed out. The helper suppresses timeout retries for wrapped `URLError` timeout reasons. **Known limitation:** direct `TimeoutError` / socket / `OSError(ETIMEDOUT)` shapes are not all suppressed in this version and may be retried. Do not treat this as an exactly-once write guarantee; see [operations](docs/operations.md).
 
 If BDH is unreachable:
 
@@ -374,7 +372,7 @@ Hermes LLM ────────────────┐
      ▼                     │
 post_api_request           │
      │                     │
-     │ if stop + >200 chars│
+     │ if stop + non-empty│
      │ classification=false → skip write
      │ source: assistant_response
      ▼                     │
@@ -422,27 +420,25 @@ plugins:
     - bdh-hermes-bridge
 ```
 
-Restart the gateway after changing the plugin code or configuration:
-
-```bash
-hermes gateway restart
-```
+Load code/config changes in a new **owning profile process**. Test in an isolated profile first; restart a production owner only after explicit approval. Do not restart an unrelated gateway. No restart is needed for the isolated discovery/stats check.
 
 Plugins are loaded at process startup. Editing `__init__.py` without restarting leaves the running gateway on the old implementation — a classic way to debug code that is not actually running.
 
 ## Plugin manifest
 
-`plugin.yaml` declares:
+`plugin.yaml` declares these integration surfaces; `register()` implements them:
 
 ```yaml
 name: bdh-hermes-bridge
-version: 0.8.1
+version: 0.11.0
 kind: standalone
 provides_hooks:
   - pre_llm_call
   - post_api_request
   - post_tool_call
   - transform_llm_output
+  - on_session_finalize
+  - on_session_reset
 provides_tools:
   - bdh_query
   - bdh_stats
@@ -496,11 +492,7 @@ search="bdh-bridge"
 rg "$search" ~/.hermes/logs/agent.log ~/.hermes/logs/errors.log
 ```
 
-A successful load logs:
-
-```text
-[bdh-bridge] registered: hooks=[pre_llm_call, post_api_request], tools=[bdh_query, bdh_stats], api=http://localhost:8643
-```
+Verify the actual loader/registration result rather than expecting a fixed log line: `register()` installs six hooks and two tools. The optional idle watcher is bridge-owned. The [isolated quickstart](docs/quickstart.md) exercises real registry dispatch.
 
 ## Operational notes
 
@@ -514,7 +506,7 @@ A successful load logs:
 ## Semantic vault-router overlay
 
 The bridge can optionally resolve `vault_id` from query content when deterministic routing returns `None`.
-This is an opt-in experimental overlay and never overrides explicit hints or session-bound vaults.
+This is an experimental retrieval-only overlay and never overrides explicit hints or session-bound vaults. Its result is not propagated into write state.
 
 ### Files
 

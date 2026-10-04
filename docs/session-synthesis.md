@@ -60,7 +60,7 @@ finalize / reset / session boundary
   ├─ bound the transcript
   └─ submit one `source=session_synthesis` request to BDH
 
-idle (on_session_idle)
+idle (bridge-owned watcher calls _on_session_idle)
   ├─ wait logically for in-flight per-turn writes (without blocking the hook)
   ├─ if the current epoch has fewer than min-turns, leave it open (non-destructive)
   ├─ otherwise drain the epoch, bound the transcript, and submit one
@@ -68,8 +68,9 @@ idle (on_session_idle)
   └─ a later turn starts a new epoch, eligible for its own idle/finalize flush
 ```
 
-The current implementation uses Hermes `on_session_finalize`,
-`on_session_reset`, and `on_session_idle` hooks. Session identity rotation
+The implementation registers Hermes `on_session_finalize` and
+`on_session_reset`; the bridge-owned idle watcher calls `_on_session_idle` directly.
+There is no registered Hermes `on_session_idle` hook. Session identity rotation
 remains supported as a compatibility boundary, but a new turn is not required
 for a finalized session to flush.
 
@@ -106,8 +107,8 @@ now two categories:
 
 Each buffered item contains:
 
-- the user message, capped at 1,500 characters;
-- the assistant response, capped at 1,500 characters;
+- the user message, capped at 4,000 characters;
+- the assistant response, capped at 12,000 characters;
 - the resolved `vault_id` for that turn;
 - a `context_only` boolean flag distinguishing the two categories.
 
@@ -129,28 +130,9 @@ finalized.
 
 ## Vault routing and isolation
 
-The synthesis uses the same vault decision produced for the turn write path.
-This is important: the semantic router must not affect only retrieval while the
-later write silently falls back to the default vault.
+Synthesis uses deterministic scope captured for the turn write path. Explicit vault hints, structured scope-map identities, stable platform identities and permitted unscoped default form the authority chain. Declared unresolved scopes fail closed. Mixed-vault buffers are rejected.
 
-Resolution order for each turn is:
-
-1. explicit `vault_id` / `bdh_vault_id`;
-2. structured project/client/workspace scope through the configured scope map;
-3. stable platform identity through the configured scope map;
-4. the local semantic vault-router overlay when deterministic routing has no
-   result;
-5. BDH's configured default when no scoped decision exists.
-
-The bridge retains the resolved vault with every successful buffered turn. If a
-session contains turns from more than one vault, the synthesis is rejected
-rather than merged. This prevents client or project knowledge from crossing a
-vault boundary.
-
-The local semantic overlay is implemented by `vault_router.py`. It reads the
-operator-maintained `BDH_VAULT_ROUTER_INDEX` and applies confidence and margin
-guards. The index is local and ignored by Git; it must never be committed to
-this public repository.
+The semantic overlay in `vault_router.py` is **retrieval-only**. It can select a vault for a read when deterministic scope has no result, but that result is deliberately NOT saved into write state or synthesis buffers. A topic match is not write permission. Standalone watchers apply an additional actor-policy gate from `synthesis_scope.py`; do not conflate it with hook routing. See [operations](operations.md) and [semantic router](semantic-vault-router.md).
 
 ## Synthesis request
 
@@ -208,8 +190,11 @@ The feature is opt-in:
 | Environment variable | Default | Meaning |
 |---|---:|---|
 | `BDH_SESSION_SYNTH_ENABLED` | `false` | Enable session-end synthesis |
-| `BDH_SESSION_SYNTH_MIN_TURNS` | `3` | Minimum successful written turns |
-| `BDH_SESSION_SYNTH_MAX_CHARS` | `6000` | Maximum transcript characters |
+| `BDH_SESSION_SYNTH_MIN_TURNS` | `1` | Minimum eligible buffered turns (accepted or context-only) |
+| `BDH_SESSION_SYNTH_MAX_CHARS` | `20000` | Maximum transcript characters; provider is operator-selected |
+| `BDH_SESSION_TURN_USER_MAX_CHARS` | `4000` | Per-turn user-text cap |
+| `BDH_SESSION_TURN_ASSISTANT_MAX_CHARS` | `12000` | Per-turn assistant-text cap |
+| `BDH_SESSION_SYNTH_TIMEOUT` | `300` | Request timeout seconds, clamped 60–600 |
 
 Recommended rollout:
 
@@ -241,22 +226,9 @@ transcript to BDH's `/api/query` write path with `source=session_synthesis`.
 BDH resolves a source-specific runtime override before generating the response
 and extracting durable concepts.
 
-The current runtime for `session_synthesis` is deliberately local-only:
+No local provider/model is hard-coded for this source. Harness merges the operator's `llm_source_overrides.session_synthesis` into the selected runtime and disables completion fallback for synthesis sources. A configured cloud primary remains cloud; disabling fallback is not a local-only guarantee.
 
-```text
-provider:             oMLX
-model:                qwen3.8-27b-oq4e-mtp
-endpoint:             http://127.0.0.1:8083/v1/chat/completions
-chat_template_kwargs: {enable_thinking: false, thinking: false}
-fallbacks:            none
-```
-
-BDH hard-forces this source-specific route even if an older private config still
-contains a Cloud override. The normal global BDH model and fallback chain remain
-unchanged. The synthesis audit is persisted per vault at
-`.bdh-audit/synthesis.jsonl`; it stores metadata and hashes, never the raw
-transcript.
-The final durable-storage decision remains BDH's neurogenesis/durability gate.
+To require local completion, set `local_only: true` with a local `ollama` or `omlx` provider and an actual served model/loopback `base_url` in the Harness override. [Operations](operations.md) gives a portable example. Embedding routing and rewrite classification must be reviewed separately. The synthesis audit is per-vault `.bdh-audit/synthesis.jsonl`; transcript hashes there do not remove raw text from Hermes DBs, durable buffers, payloads or model input. The final storage decision belongs to Harness staging/neurogenesis gates.
 
 ### 3. Optional `pre_llm_call` rewrite/classification: separate model
 
@@ -277,17 +249,13 @@ README and is independent of the source-specific synthesis model.
 
 - **No prompt-path regression:** synthesis is asynchronous and never blocks the
   current answer.
-- **No failed-write learning:** only successfully submitted per-turn writes are
-  buffered.
+- **Buffer categories:** accepted turns follow successful per-turn writes; safe context-only turns can also enter the buffer without a direct write.
 - **Scope isolation:** mixed-vault sessions are rejected.
 - **Bounded memory:** buffer and transcript limits prevent unbounded process or
   request growth.
-- **No duplicate retry learning:** non-idempotent BDH writes do not retry after
-  a timeout that may have been processed server-side.
+- **Timeout limitation:** the helper suppresses wrapped URL timeout retries, but direct socket/OSError timeout shapes are not comprehensively suppressed in this version. Do not replay ambiguous writes; see [operations](operations.md).
 - **Opt-in:** the feature is disabled unless explicitly enabled.
-- **Process-local buffer:** an abrupt process crash before finalization loses
-  the unflushed in-memory buffer; prior successful per-turn writes remain
-  independent.
+- **Durable buffer:** when synthesis is enabled and the watcher starts, the bridge loads/persists `bdh-session-synthesis-buffer.json` (override `BDH_SESSION_SYNTH_BUFFER_FILE`) under the selected Hermes home. Treat it as private transcript data; failed persistence and crash windows are not an exactly-once guarantee.
 - **Not a replacement for curation:** synthesis is a candidate learning path,
   not an authoritative decision ledger.
 - **Privacy boundary:** the transcript is sent through the configured BDH
@@ -307,8 +275,7 @@ The bridge test suite covers:
 - idle flush: exactly one synthesis per epoch, idempotent repeated idle,
   new epoch on activity, finalize-after-idle without duplication, pending-write
   barrier, mixed-scope rejection, and below-min-turns non-destructive retention;
-- propagation of the semantic router's vault decision through retrieval,
-  per-turn write, and session synthesis;
+- deterministic turn-scope propagation and retrieval-only semantic hints;
 - audit metadata: synthesis_id, session_id, queued_at, transcript_sha256.
 
 Run locally with the feature enabled but the router index unset when testing

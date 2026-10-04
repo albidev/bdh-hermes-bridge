@@ -1,21 +1,18 @@
-# Semantic Vault Router
+# Semantic vault router: retrieval only
 
-Experimental local routing index for the BDH bridge. It suggests a `vault_id` from the user query when deterministic routing returns `None`.
+An optional deterministic lexical overlay suggests a vault from query text using a local concept index. It does not call an LLM. Its output is a **read hint**, never write authorization.
 
-## How it works
+## Resolution and authority
 
-1. Deterministic routing resolves `vault_id` via explicit hint, session context, project/repo alias, or `BDH_VAULT_ID`.
-2. If that returns `None`, the semantic overlay queries a local index of `{vault_id, title, concepts}`.
-3. If a single vault is confidently matched, it is used as an implicit `vault_hint` for that turn.
-4. If the query is ambiguous or no match passes the confidence threshold, the overlay is ignored and the query proceeds without a suggested vault.
+`pre_llm_call` first resolves deterministic hook scope: explicit vault hints, structured scope map, stable platform identities and the permitted unscoped default. An unresolved declared scope is rejected. Only when deterministic routing has no vault does the semantic overlay run.
 
-## Index file
+A unique confident match is used for that retrieval request. **It is deliberately not persisted into turn state**, so per-turn writes and buffered synthesis keep their deterministic scope. A query mentioning a client can read that client's relevant notes without granting authority to store the conversation in that client vault. Confidence/margin checks reduce ambiguous suggestions; they are not an access-control system.
 
-- Path: `vault-router-index.local.json`
-- Never commit this file. It is gitignored.
-- Regenerate it with `scripts/build_vault_router_index.py`.
+The standalone watcher actor policy is separate: addressed handles, serving profile, room registry and verified default-session opt-in determine whether synthesis is authorized. Contradictory/unknown actors fail closed. See [operations](operations.md) and [watcher deployment](../deploy/README.md).
 
-## Bootstrap script
+## Local index
+
+Default file: `vault-router-index.local.json`; override with `BDH_VAULT_ROUTER_INDEX`. Keep it private and untracked: titles/concepts can disclose project information.
 
 ```bash
 python3 scripts/build_vault_router_index.py \
@@ -25,8 +22,8 @@ python3 scripts/build_vault_router_index.py \
   --min-node-size 1024
 ```
 
-## Rules
+Check actual IDs against your configured Harness vaults. The index is an optional retrieval aid, not a mandatory Mission Control registry. Explicit hints/session bindings are not overridden. A missing index, no adequate match or ambiguous scores means no semantic hint.
 
-- The index is local only.
-- Do not hardcode private vault names or paths in shared skills or docs.
-- Deterministic routing remains the primary path; this overlay is optional and fallback-only.
+## Verification
+
+Run `test_vault_router.py` in the repository's isolated test environment with ambient `BDH_VAULT_ROUTER_INDEX` unset; tests cover missing/invalid indexes, unique/ambiguous matching and confidence thresholds. The hook/write contract is covered separately in the bridge suite. Do not validate writes by querying a real client's vault.
