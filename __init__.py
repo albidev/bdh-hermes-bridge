@@ -4,6 +4,15 @@ BDH Bridge — Bidirectional Hermes ↔ BDH Graph Harness integration.
 Write path: feeds session content to BDH after each API response.
 Read path: provides bdh_query and bdh_stats tools.
 
+v0.12.0:
+  - Non-idempotent POST /api/query is retried only when the failure proves BDH
+    never received it (connect-phase error such as connection refused); every
+    timeout shape, reset after send, HTTP error and undecodable body is
+    reported once (no double learning).
+  - Bounded per-turn writes: BDH_PER_TURN_TIMEOUT (default 60s) and
+    BDH_PER_TURN_MAX_INFLIGHT (default 4); saturation drops are counted and
+    logged, and every exit path releases its slot (#49, with Davide Davin).
+
 v0.11.0:
   - Epoch-aware idle flush: an explicit on_session_idle hook stages at most one
     candidate synthesis for the current buffered epoch without resetting the
@@ -2294,7 +2303,7 @@ _BDH_STATS_SCHEMA = {
 # Minimal plugin metadata returned for Hermes introspection.
 PLUGIN = {
     "name": "bdh-bridge",
-    "version": "0.11.0",
+    "version": "0.12.0",
     "description": "Bidirectional Hermes ↔ BDH Graph Harness bridge with independent rewrite routing, normalization, session synthesis, and lifecycle hooks.",
 }
 

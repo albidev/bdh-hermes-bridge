@@ -8,7 +8,7 @@ Bidirectional plugin bridge between [Hermes Agent](https://github.com/NousResear
 
 The plugin connects Hermes' real conversations to BDH's neural knowledge graph and exposes BDH context as native Hermes tools. It learns from actual usage — not fabricated bridge queries.
 
-> **Status:** experimental standalone Hermes plugin, version **0.11.0**.
+> **Status:** experimental standalone Hermes plugin, version **0.12.0**.
 
 Start with [isolated onboarding](docs/quickstart.md), then [operations/privacy](docs/operations.md) and [compatibility](docs/compatibility.md); use the [alpha checklist](docs/alpha-checklist.md) before rollout. Discovery/stats verification does not run conversation hooks. **Enabling the plugin is not read-only**; rewrite/synthesis flags are not universal write-disable switches.
 
@@ -434,7 +434,7 @@ Plugins are loaded at process startup. Editing `__init__.py` without restarting 
 
 ```yaml
 name: bdh-hermes-bridge
-version: 0.11.0
+version: 0.12.0
 kind: standalone
 provides_hooks:
   - pre_llm_call

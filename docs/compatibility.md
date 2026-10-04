@@ -13,7 +13,7 @@ A local source checkout may differ from the CI-installed package. Report the exa
 [plugin.yaml](../plugin.yaml) and [register()](../__init__.py) declare six hooks:
 `pre_llm_call`, `post_api_request`, `post_tool_call`, `transform_llm_output`, `on_session_finalize`, `on_session_reset`; and two tools: `bdh_query` (required `query`, optional `vault_id`) and `bdh_stats` (optional `vault_id`). The idle watcher is bridge-owned, not a registered Hermes idle hook.
 
-Manifest version and source metadata currently both say **0.11.0**. This is a plugin version, not a release tag or a Hermes core version. No unverified minimum-version manifest field is added here.
+Manifest version and source metadata currently both say **0.12.0**. This is a plugin version, not a release tag or a Hermes core version. No unverified minimum-version manifest field is added here.
 
 ## Fresh test environment (not a production Hermes install)
 
