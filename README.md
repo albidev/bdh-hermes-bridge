@@ -121,6 +121,8 @@ When `BDH_QUERY_REWRITE_ENABLED=true`, the bridge adds an LLM-based preprocessin
 | `BDH_CONTEXT_MESSAGES_N` | `6` | Number of conversation_history messages to include |
 | `BDH_CONTEXT_MSG_MAX_CHARS` | `200` | Max chars per context message |
 | `BDH_REWRITE_MAX_VARIANTS` | `10` (v2 cap: `3`) | Legacy/provider variant bound; v2 never sends more than 3 retrieval variants |
+| `BDH_PER_TURN_TIMEOUT` | `60` | Automatic per-turn write timeout, clamped 5–600s; fit it to local completion latency |
+| `BDH_PER_TURN_MAX_INFLIGHT` | `4` | Max concurrent per-turn write workers, clamped 1–32; a write arriving with all busy is dropped and logged |
 | `BDH_SESSION_SYNTH_ENABLED` | `false` | Opt-in for cross-session synthesis on Hermes session finalization/reset |
 | `BDH_SESSION_SYNTH_MIN_TURNS` | `1` | Minimum eligible buffered turns (accepted or context-only) |
 | `BDH_SESSION_SYNTH_MAX_CHARS` | `20000` | Maximum transcript characters; operator-selected provider |
@@ -327,7 +329,7 @@ BDH requests are made through a small HTTP helper with configurable base URL and
 |---|---:|---:|---|
 | Rewrite LLM (classify + rewrite) | 15s per provider | 1 per candidate | Advances through configured provider chain, then mechanical fallback |
 | Automatic read hook | 2s | 1 | N/A |
-| Automatic write hook | 30s | 2 total | Only when the request provably never reached BDH |
+| Automatic write hook | `BDH_PER_TURN_TIMEOUT` (60s) | 2 total | Only when the request provably never reached BDH |
 | `bdh_query` tool | 60s | 2 total | Only when the request provably never reached BDH (e.g. connection refused) |
 | `bdh_stats` tool | 10s | 2 total | Read-only GET may retry |
 
@@ -338,6 +340,8 @@ If BDH is unreachable:
 - the automatic hook logs a warning and Hermes continues normally;
 - `bdh_query` returns an actionable JSON error telling Hermes to answer from internal knowledge;
 - `bdh_stats` returns a JSON error instead of crashing the agent loop.
+
+Automatic per-turn writes are bounded: at most `BDH_PER_TURN_MAX_INFLIGHT` run at once. A write that arrives while every slot is busy is dropped, not queued or retried, and logged with a running count (`per-turn write dropped … N dropped since start`); that turn does not enter the session-synthesis buffer. Every exit path releases its slot, so failures cannot exhaust the bound.
 
 Other transient request failures can use the bounded retry path with exponential backoff. The current implementation is intentionally short and conservative rather than retrying for minutes while the agent waits.
 

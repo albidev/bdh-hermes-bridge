@@ -118,7 +118,8 @@ is capped by `BDH_SESSION_SYNTH_MAX_CHARS` and is rendered as `USER:` /
 
 The following are excluded from the buffer:
 
-- failed per-turn writes;
+- failed per-turn writes, including timeouts (`BDH_PER_TURN_TIMEOUT`) and writes
+  dropped because every `BDH_PER_TURN_MAX_INFLIGHT` slot was busy;
 - truncated (`finish_reason != stop`) responses;
 - blacklisted prompts;
 - cron sources without the explicit BDH opt-in marker;

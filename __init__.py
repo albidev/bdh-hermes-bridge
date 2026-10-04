@@ -185,7 +185,7 @@ _SESSION_SYNTH_MAX_CHARS = _bounded_int(
 )
 # Synthesising a full session on the local oMLX model is slow (minutes, not
 # seconds): the client must wait long enough for the request to complete. The
-# default 30s tool timeout would abort the HTTP read while the server is still
+# shorter per-turn timeout would abort the HTTP read while the server is still
 # generating, leaving the worker to log a false 'unreachable' even though the
 # write still lands. 300s matches llm_timeout in bdh-config.local.yaml.
 _SESSION_SYNTH_TIMEOUT = _bounded_int(
@@ -206,6 +206,7 @@ _session_idle_requested = set()  # sessions waiting for pending writes before an
 _bdh_used_sessions = set()
 _bdh_state_lock = threading.Lock()
 _bdh_per_turn_slots = threading.BoundedSemaphore(_BDH_PER_TURN_MAX_INFLIGHT)
+_bdh_per_turn_dropped = 0  # saturated per-turn writes dropped since process start
 _SESSION_SYNTH_IDLE_SECONDS = float(os.environ.get("BDH_SESSION_SYNTH_IDLE_SECONDS", "300") or 300)
 _SESSION_SYNTH_IDLE_POLL_SECONDS = float(os.environ.get("BDH_SESSION_SYNTH_IDLE_POLL_SECONDS", "60") or 60)
 _session_idle_watcher = None
@@ -1548,56 +1549,64 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
                      metadata=None, wait=False):
     """Fire-and-forget query — used by hooks.
 
-    Short timeout (30s) and 1 retry. If BDH is down, the daemon thread
-    exits quickly instead of piling up.
+    Per-turn writes (``source="assistant_response"``) use
+    ``_BDH_PER_TURN_TIMEOUT`` and take one of ``_BDH_PER_TURN_MAX_INFLIGHT``
+    process-wide slots. With every slot busy the write is dropped (counted in
+    ``_bdh_per_turn_dropped`` and logged), never queued or retried. Session
+    synthesis keeps its own ``_SESSION_SYNTH_TIMEOUT`` and is not bounded.
 
     Args:
         on_success: Optional zero-arg callback invoked **only** after the
             HTTP request succeeds (result is not None). Called from the
-            daemon thread and must be thread-safe.
-        on_complete: Optional zero-arg callback invoked exactly once after
-            the worker has a result, including failure. This lets lifecycle
-            code release pending-write state without waiting or joining.
+            worker thread and must be thread-safe.
+        on_complete: Optional zero-arg callback invoked exactly once when this
+            function returns normally, on success and on failure alike: from
+            the worker thread, or inline on the caller's thread when a
+            saturated per-turn write is dropped. If this function raises (the
+            worker could not start), ``on_complete`` has **not** run and the
+            caller owns releasing its lifecycle state.
         metadata: Optional dict of audit metadata to propagate through the
             request. The bridge never reads or logs this dict; it is
             forwarded verbatim so downstream audit consumers can correlate
             requests without re-deriving fields.
     """
-    is_per_turn = source == "assistant_response"
+    global _bdh_per_turn_dropped
+
+    def _complete():
+        if on_complete is not None:
+            try:
+                on_complete()
+            except Exception as cb_err:
+                logger.warning(f"[bdh-bridge] on_complete callback error: {cb_err}")
+
     slot_acquired = False
-    if is_per_turn:
+    if source == "assistant_response":
         slot_acquired = _bdh_per_turn_slots.acquire(blocking=False)
         if not slot_acquired:
+            with _bdh_state_lock:
+                _bdh_per_turn_dropped += 1
+                dropped = _bdh_per_turn_dropped
             logger.warning(
-                "[bdh-bridge] per-turn write saturated — dropping ambiguous write "
-                "without retry; releasing lifecycle barrier"
+                f"[bdh-bridge] per-turn write dropped: all {_BDH_PER_TURN_MAX_INFLIGHT} "
+                f"slots busy ({dropped} dropped since start); not queued or retried"
             )
-            if on_complete is not None:
-                try:
-                    on_complete()
-                except Exception as cb_err:
-                    logger.warning(
-                        f"[bdh-bridge] on_complete callback error: {cb_err}"
-                    )
+            _complete()
             return None
 
     def _worker():
-        payload = {"query": query_text}
-        resolved_vault_id = _resolve_vault_id(vault_id)
-        if resolved_vault_id:
-            payload["vault_id"] = resolved_vault_id
-        if user_prompt:
-            payload["user_prompt"] = user_prompt
-        if source:
-            payload["source"] = source
-        if metadata:
-            payload["metadata"] = metadata
-
-        result = None
         try:
-            # Local oMLX synthesis takes minutes; the default 30s tool timeout
-            # would abort the read mid-generation. Long timeout only for the
-            # session-synthesis source (fire-and-forget worker, non-blocking).
+            payload = {"query": query_text}
+            resolved_vault_id = _resolve_vault_id(vault_id)
+            if resolved_vault_id:
+                payload["vault_id"] = resolved_vault_id
+            if user_prompt:
+                payload["user_prompt"] = user_prompt
+            if source:
+                payload["source"] = source
+            if metadata:
+                payload["metadata"] = metadata
+            # Local oMLX synthesis takes minutes and local per-turn completions
+            # can exceed 30s, so each source has its own bounded timeout.
             request_timeout = (
                 _SESSION_SYNTH_TIMEOUT if source == "session_synthesis"
                 else _BDH_PER_TURN_TIMEOUT
@@ -1622,19 +1631,21 @@ def _bdh_query_async(query_text, user_prompt=None, source="assistant_response",
                         )
             else:
                 logger.warning("[bdh-bridge] BDH unreachable — consolidation or server down")
+        except Exception as e:
+            logger.warning(f"[bdh-bridge] {source} write failed before completion: {e}")
         finally:
             if slot_acquired:
                 _bdh_per_turn_slots.release()
-            if on_complete is not None:
-                try:
-                    on_complete()
-                except Exception as cb_err:
-                    logger.warning(
-                        f"[bdh-bridge] on_complete callback error: {cb_err}"
-                    )
+            _complete()
 
-    worker = threading.Thread(target=_worker, daemon=not wait)
-    worker.start()
+    try:
+        worker = threading.Thread(target=_worker, daemon=not wait)
+        worker.start()
+    except BaseException:
+        # The worker never ran, so its finally will not release the slot.
+        if slot_acquired:
+            _bdh_per_turn_slots.release()
+        raise
     if wait:
         worker.join(timeout=_SESSION_SYNTH_TIMEOUT + 10)
     return worker
