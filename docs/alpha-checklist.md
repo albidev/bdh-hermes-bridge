@@ -8,10 +8,10 @@ Begin with [isolated onboarding](quickstart.md), [privacy/operations](operations
 - [ ] Verify deterministic hook routing, retrieval-only semantic hints and standalone watcher actor policy separately.
 - [ ] Verify local-only Harness source overrides explicitly; fallback suppression alone does not prohibit cloud inference.
 - [ ] Review rewrite provider data flow and all transcript stores/retention before enabling real turns.
-- [ ] Fix and regression-test direct, socket, `OSError(ETIMEDOUT)` and wrapped `URLError` timeouts so non-idempotent POSTs cannot be retried ambiguously. Current helper coverage is incomplete: do not claim exactly-once writes.
+- [x] Non-idempotent POSTs are never retried after an ambiguous outcome (all timeout shapes, reset after send, HTTP error, bad body); regression tests in `test_post_retry_safety.py`. This removes client double-writes; it is not an exactly-once guarantee.
 - [ ] Test watcher dry-run with copied DB/policy and fresh scratch ledger paths; distinguish session no-record dry-run from room digest-recording dry-run.
 - [ ] Back up buffers, ledgers, profile DBs/policy and consistent Harness state before a rollout.
 - [ ] Enable one feature at a time in a disposable profile and read back outcomes from actual candidate/audit/operation records.
 - [ ] Review changed artifacts independently, define release version/upgrade notes, and get approval before commit/push/tag or production restart.
 
-The isolated discovery/stats path is usable without Mission Control or a production restart. **The automatic write path is not cleared for unattended production adoption until the timeout blocker and intended profile E2E checks are resolved.** There is no universal automatic-write-disable switch; removing the plugin from the enabled profile and reloading its owner is different from toggling rewrite/synthesis.
+The isolated discovery/stats path is usable without Mission Control or a production restart. **The automatic write path is not cleared for unattended production adoption until the intended profile E2E checks are resolved.** There is no universal automatic-write-disable switch; removing the plugin from the enabled profile and reloading its owner is different from toggling rewrite/synthesis.

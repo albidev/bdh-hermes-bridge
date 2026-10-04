@@ -77,6 +77,7 @@ v0.4.0:
   - Removed dead _write_queue/_queue_lock
 """
 
+import errno
 import hashlib
 import json
 import logging
@@ -90,7 +91,7 @@ import urllib.request
 import urllib.parse
 import uuid
 from pathlib import Path
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 try:
     # Hermes loads standalone plugins as packages; use package-relative imports
@@ -1359,14 +1360,37 @@ def _on_session_idle(**kwargs):
 # BDH HTTP helpers
 # ---------------------------------------------------------------------------
 
+def _is_timeout(reason):
+    if isinstance(reason, TimeoutError):
+        return True
+    if isinstance(reason, OSError) and reason.errno == errno.ETIMEDOUT:
+        return True
+    return "timed out" in str(reason).lower() or "timeout" in str(reason).lower()
+
+
+def _write_never_reached_server(error):
+    """True only when a failed POST provably was not processed by BDH.
+
+    urllib raises connect/send failures wrapped in ``URLError``. Anything raised
+    after the request was fully sent (response wait, body read, JSON decode) is
+    unwrapped, and ``HTTPError`` is a server answer: in both cases BDH may have
+    already applied the write. A wrapped timeout stays non-retryable as well,
+    because a send that timed out cannot prove the body never arrived.
+    """
+    if isinstance(error, HTTPError) or not isinstance(error, URLError):
+        return False
+    return not _is_timeout(error.reason)
+
+
 def _bdh_request(endpoint, data=None, timeout=10, retries=1, backoff_base=2.0,
                  retry_on_timeout=True):
     """HTTP request to BDH API with optional retry + exponential backoff.
 
     Args:
-        retry_on_timeout: If False, do NOT retry on timeout errors. This is
-            critical for POST /api/query — if the server processed the request
-            but the client timed out, retrying would re-run plasticity and
+        retry_on_timeout: False marks the request as non-idempotent (POST
+            /api/query learns). It is then retried only when the failure proves
+            BDH never received it (e.g. connection refused); any ambiguous
+            outcome returns None, since a retry would re-run plasticity and
             neurogenesis, causing double learning and duplicate notes.
 
     Returns response dict on success, None after all retries exhausted.
@@ -1390,15 +1414,12 @@ def _bdh_request(endpoint, data=None, timeout=10, retries=1, backoff_base=2.0,
 
         except (URLError, OSError, json.JSONDecodeError) as e:
             last_error = e
-            # Don't retry on timeout for POST requests (non-idempotent)
-            if not retry_on_timeout and isinstance(e, URLError):
-                reason = getattr(e, 'reason', '')
-                if 'timed out' in str(reason).lower() or 'timeout' in str(reason).lower():
-                    logger.warning(
-                        f"[bdh-bridge] timeout on {endpoint} (not retrying — "
-                        f"non-idempotent POST)"
-                    )
-                    return None
+            if not retry_on_timeout and not _write_never_reached_server(e):
+                logger.warning(
+                    f"[bdh-bridge] {endpoint} outcome unknown after "
+                    f"{type(e).__name__}: {e} (not retrying — non-idempotent POST)"
+                )
+                return None
             if attempt < retries - 1:
                 wait = backoff_base ** attempt
                 logger.warning(

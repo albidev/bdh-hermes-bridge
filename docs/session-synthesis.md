@@ -253,7 +253,7 @@ README and is independent of the source-specific synthesis model.
 - **Scope isolation:** mixed-vault sessions are rejected.
 - **Bounded memory:** buffer and transcript limits prevent unbounded process or
   request growth.
-- **Timeout limitation:** the helper suppresses wrapped URL timeout retries, but direct socket/OSError timeout shapes are not comprehensively suppressed in this version. Do not replay ambiguous writes; see [operations](operations.md).
+- **No ambiguous replay:** the synthesis POST is retried only when BDH provably never received it (e.g. connection refused). A timeout while BDH is generating, a reset after sending or an error response is never retried, so a slow local model cannot cause a second synthesis. Do not replay ambiguous writes by hand either; see [operations](operations.md).
 - **Opt-in:** the feature is disabled unless explicitly enabled.
 - **Durable buffer:** when synthesis is enabled and the watcher starts, the bridge loads/persists `bdh-session-synthesis-buffer.json` (override `BDH_SESSION_SYNTH_BUFFER_FILE`) under the selected Hermes home. Treat it as private transcript data; failed persistence and crash windows are not an exactly-once guarantee.
 - **Not a replacement for curation:** synthesis is a candidate learning path,

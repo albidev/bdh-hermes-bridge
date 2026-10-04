@@ -327,11 +327,11 @@ BDH requests are made through a small HTTP helper with configurable base URL and
 |---|---:|---:|---|
 | Rewrite LLM (classify + rewrite) | 15s per provider | 1 per candidate | Advances through configured provider chain, then mechanical fallback |
 | Automatic read hook | 2s | 1 | N/A |
-| Automatic write hook | 30s | 2 total | No |
-| `bdh_query` tool | 60s | 2 total | Wrapped URL timeouts suppressed; direct timeout limitation below |
+| Automatic write hook | 30s | 2 total | Only when the request provably never reached BDH |
+| `bdh_query` tool | 60s | 2 total | Only when the request provably never reached BDH (e.g. connection refused) |
 | `bdh_stats` tool | 10s | 2 total | Read-only GET may retry |
 
-The POST `/api/query` endpoint is non-idempotent: BDH may have processed a request even if the client timed out. The helper suppresses timeout retries for wrapped `URLError` timeout reasons. **Known limitation:** direct `TimeoutError` / socket / `OSError(ETIMEDOUT)` shapes are not all suppressed in this version and may be retried. Do not treat this as an exactly-once write guarantee; see [operations](docs/operations.md).
+The POST `/api/query` endpoint is non-idempotent: BDH may have processed a request even if the client timed out. A write is retried only when the failure proves BDH never received it (a connect-phase error such as connection refused). Any ambiguous outcome — response/read timeout of any shape, connection reset after sending, an HTTP error response, an undecodable body, or a connect/send timeout — is reported once and never replayed. This prevents double learning from client retries; it is still not an exactly-once guarantee (an ambiguous write is dropped on the client, not reconciled), see [operations](docs/operations.md).
 
 If BDH is unreachable:
 
