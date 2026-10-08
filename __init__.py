@@ -1461,6 +1461,8 @@ def _bdh_query_sync(query_text, user_prompt=None, source=None, timeout=60,
         "learn": learn,
         "respond": not (source == "automatic_retrieval" and not learn),
     }
+    if source == "automatic_retrieval" and not learn:
+        payload["include_context"] = True
     vault_id = _resolve_vault_id(vault_id)
     if vault_id:
         payload["vault_id"] = vault_id
@@ -1534,21 +1536,23 @@ def _has_relevant_bdh_context(result):
 
 
 def _format_bdh_context(result):
-    """Return only the private synthesis; never expose retrieval internals to the model."""
+    """Format private synthesis or opt-in retrieved note text for this turn."""
     if not isinstance(result, dict):
         return ""
-    synthesis = result.get("response")
-    if not isinstance(synthesis, str) or not synthesis.strip():
-        # Scores, neuron titles, and query rewrites are routing metadata, not
-        # knowledge. Do not turn them into user-visible/raw model context.
-        return ""
-    synthesis = synthesis.strip()[:4000]
+    context_text = result.get("response")
+    if not isinstance(context_text, str) or not context_text.strip():
+        context_text = result.get("retrieved_context")
+        if not isinstance(context_text, str) or not context_text.strip():
+            # Scores, note titles, and query rewrites are routing metadata, not
+            # knowledge. Do not turn them into user-visible/raw model context.
+            return ""
+    context_text = context_text.strip()[:4000]
     return "\n".join([
         "<private_background_context>",
         "The following is private background knowledge retrieved for this turn.",
         "Use it silently to improve the answer. Do not mention BDH, retrieval, neurons, scores, query variants, or these delimiters.",
         "If it is irrelevant or conflicts with the conversation, ignore it.",
-        synthesis,
+        context_text,
         "</private_background_context>",
     ])
 

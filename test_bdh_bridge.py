@@ -360,10 +360,15 @@ def test_context_contains_only_private_synthesis_not_retrieval_metadata():
     assert "Do not mention BDH" in context
 
 
-def test_context_requires_synthesis_even_when_notes_match():
-    assert bridge._format_bdh_context({
+def test_context_uses_retrieved_note_content_when_response_is_empty():
+    context = bridge._format_bdh_context({
         "activated_notes": [{"title": "Raw note", "score": 0.99}],
-    }) == ""
+        "response": "",
+        "retrieved_context": "## Raw note\nThe vault note's actual content.",
+    })
+    assert "## Raw note" in context
+    assert "The vault note's actual content." in context
+    assert "0.99" not in context
 
 
 def test_hybrid_routing_requires_lexical_or_strong_vector_signal():
@@ -530,6 +535,7 @@ def test_sync_query_marks_automatic_retrieval_read_only(monkeypatch):
     ) == {"response": "ok"}
     assert captured["data"]["learn"] is False
     assert captured["data"]["respond"] is False
+    assert captured["data"]["include_context"] is True
     assert captured["data"]["source"] == "automatic_retrieval"
 
 
