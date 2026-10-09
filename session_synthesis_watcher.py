@@ -1,6 +1,6 @@
 """Standalone BDH session-synthesis idle watcher.
 
-This process owns the TUI/Mission Control idle path without importing or
+This process owns the TUI/Mission Control/Desktop idle path without importing or
 modifying Hermes core. It reads SessionDB read-only, reconstructs safe
 user/assistant pairs, and invokes the bridge's existing Curate-gated flush.
 """
@@ -48,7 +48,7 @@ DEFAULT_BACKLOG_LIMIT = 3
 _BACKLOG_SCAN_LIMIT = 200
 
 # The minimum-turn floor is OWNED by the bridge, not duplicated here. Both paths
-# must agree: the standalone watcher serves TUI/Mission Control sessions and the
+# must agree: the standalone watcher serves TUI/Mission Control/Desktop sessions and the
 # bridge's in-process idle watcher serves the rest, so a literal here meant a
 # configured BDH_SESSION_SYNTH_MIN_TURNS changed one path and silently left the
 # other at 3 — the same "two resolvers, one decision" drift as the split home
@@ -111,7 +111,7 @@ def _min_turns() -> int:
 # *inside* a hosted room, and the room watcher already synthesizes the room as a
 # whole from its aggregated transcript. Scanning them here would synthesize the
 # same conversation twice, from a partial view.
-_PROFILE_SERVED_SOURCES = ("tui", "mission-control")
+_PROFILE_SERVED_SOURCES = ("tui", "mission-control", "desktop")
 
 
 class TranscriptIdleWatcher:
