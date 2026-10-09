@@ -8,9 +8,11 @@ user/assistant pairs, and invokes the bridge's existing Curate-gated flush.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sqlite3
+import sys
 import time
 from contextlib import closing
 from pathlib import Path
@@ -18,7 +20,13 @@ from typing import Any
 
 from session_idle import SessionIdleWatcher
 from synthesis_ledger import SynthesisLedger
-from synthesis_scope import extract_mentions, load_policy, resolve_synthesis_vault
+from synthesis_scope import (
+    extract_mentions,
+    load_policy,
+    policy_file_path,
+    resolve_synthesis_vault,
+    validate_policy_document,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +136,7 @@ class TranscriptIdleWatcher:
         # a secondary profile is stored in that profile's own state.db, so a
         # watcher pinned to the default database would never see it.
         self.extra_db_paths = self._discover_profile_dbs(self.db_path)
+        self._db_errors: dict[Path, tuple[str, str]] = {}
         self.bridge = None
         self.idle = SessionIdleWatcher(
             state_path,
@@ -169,10 +178,152 @@ class TranscriptIdleWatcher:
             f"file:{target}?mode=ro", uri=True, timeout=1.0,
         )
 
+    def _db_label(self, db_path: Path) -> str:
+        try:
+            return db_path.relative_to(self.db_path.parent).as_posix()
+        except ValueError:
+            return db_path.name
+
+    def _report_db_error(self, db_path: Path, status: str, detail: str) -> None:
+        """Log database failures once per distinct state, without session text."""
+        current = (status, detail)
+        if self._db_errors.get(db_path) != current:
+            logger.error(
+                "[session-synthesis] session database read failed db=%s status=%s detail=%s",
+                self._db_label(db_path),
+                status,
+                detail,
+            )
+        self._db_errors[db_path] = current
+
+    def _report_db_recovered(self, db_path: Path) -> None:
+        if self._db_errors.pop(db_path, None) is not None:
+            logger.info(
+                "[session-synthesis] session database read recovered db=%s",
+                self._db_label(db_path),
+            )
+
+    def _inspect_database(self, db_path: Path) -> dict[str, Any]:
+        """Validate one SessionDB read-only; never select or emit transcript text."""
+        name = self._db_label(db_path)
+        if not db_path.is_file():
+            return {"name": name, "status": "missing", "open_sessions": None}
+        required = {
+            "sessions": {"id", "source", "profile_name", "last_activity_at", "ended_at"},
+            "messages": {"id", "session_id", "role", "content", "finish_reason", "active"},
+        }
+        try:
+            with closing(self._db(db_path)) as db:
+                integrity = db.execute("PRAGMA quick_check").fetchone()
+                if not integrity or integrity[0] != "ok":
+                    return {"name": name, "status": "invalid_or_unreadable", "open_sessions": None}
+                for table, expected in required.items():
+                    columns = {
+                        str(row[1]) for row in db.execute(f"PRAGMA table_info({table})")
+                    }
+                    if not expected.issubset(columns):
+                        return {"name": name, "status": "invalid_or_unreadable", "open_sessions": None}
+                placeholders = ",".join("?" for _ in _PROFILE_SERVED_SOURCES)
+                row = db.execute(
+                    "SELECT COUNT(*) FROM sessions WHERE ended_at IS NULL "
+                    f"AND source IN ({placeholders})",
+                    _PROFILE_SERVED_SOURCES,
+                ).fetchone()
+                return {
+                    "name": name,
+                    "status": "ok",
+                    "open_sessions": int(row[0]) if row else 0,
+                }
+        except (OSError, sqlite3.Error) as exc:
+            return {
+                "name": name,
+                "status": "invalid_or_unreadable",
+                "open_sessions": None,
+                "detail": type(exc).__name__,
+            }
+
+    def preflight(
+        self,
+        *,
+        actor_handle: str | None = None,
+        default_core: bool = False,
+        expected_vault_id: str,
+    ) -> dict[str, Any]:
+        """Read-only DB/policy/authorization check; never reads message bodies or POSTs."""
+        errors: list[str] = []
+        databases = [self._inspect_database(path) for path in self.all_db_paths()]
+        for path, result in zip(self.all_db_paths(), databases):
+            if result["status"] == "missing":
+                errors.append(f"database_missing:{result['name']}")
+                self._report_db_error(path, "missing", "file not found")
+            elif result["status"] != "ok":
+                errors.append(f"database_invalid_or_unreadable:{result['name']}")
+                self._report_db_error(path, result["status"], result.get("detail", "schema or integrity check failed"))
+            else:
+                self._report_db_recovered(path)
+
+        policy_path = policy_file_path()
+        policy_status = "ok"
+        try:
+            if not policy_path.is_file():
+                policy_status = "missing"
+            else:
+                raw_policy = json.loads(policy_path.read_text(encoding="utf-8"))
+                if validate_policy_document(raw_policy):
+                    policy_status = "invalid"
+        except (OSError, json.JSONDecodeError, TypeError):
+            policy_status = "invalid"
+        policy = load_policy() if policy_status == "ok" else None
+        if policy is not None and not policy.configured:
+            policy_status = "no_authorized_routes"
+        if policy_status != "ok":
+            errors.append(f"policy_{policy_status}")
+
+        authorization: dict[str, Any] = {
+            "status": "not_checked",
+            "mode": "default_core" if default_core else "actor_handle",
+            "expected_vault_id": expected_vault_id,
+            "resolved_vault_id": None,
+        }
+        if policy is not None and policy_status == "ok":
+            if default_core:
+                resolved = resolve_synthesis_vault(
+                    session_profile="default",
+                    trusted_default_session=True,
+                    policy=policy,
+                    registry={},
+                )
+            else:
+                resolved = resolve_synthesis_vault(
+                    session_mentions=[actor_handle or ""],
+                    policy=policy,
+                    registry={},
+                )
+            authorization["resolved_vault_id"] = resolved
+            if resolved is None:
+                authorization["status"] = "unauthorized"
+                errors.append("authorization_unresolved")
+            elif resolved != expected_vault_id:
+                authorization["status"] = "vault_mismatch"
+                errors.append("authorization_vault_mismatch")
+            else:
+                authorization["status"] = "authorized"
+
+        return {
+            "ok": not errors,
+            "policy": {"status": policy_status, "name": policy_path.name},
+            "databases": databases,
+            "authorization": authorization,
+            "errors": errors,
+        }
+
     def session_activity(self) -> dict[str, float | None]:
         activity: dict[str, float | None] = {}
         for db_path in self.all_db_paths():
             rows: list[Any] = []
+            if not db_path.is_file():
+                self._report_db_error(db_path, "missing", "file not found")
+                continue
             try:
                 with closing(self._db(db_path)) as db:
                     rows = db.execute(
@@ -181,8 +332,10 @@ class TranscriptIdleWatcher:
                         f"({','.join('?' * len(_PROFILE_SERVED_SOURCES))})",
                         _PROFILE_SERVED_SOURCES,
                     ).fetchall()
-            except sqlite3.Error:
+            except (OSError, sqlite3.Error) as exc:
+                self._report_db_error(db_path, "invalid_or_unreadable", type(exc).__name__)
                 continue
+            self._report_db_recovered(db_path)
             for session_id, last_activity in rows:
                 activity[str(session_id)] = last_activity
         return activity
@@ -284,7 +437,8 @@ class TranscriptIdleWatcher:
                     "ORDER BY id",
                     (session_id,),
                 ).fetchall()
-        except sqlite3.Error:
+        except sqlite3.Error as exc:
+            self._report_db_error(target_db, "invalid_or_unreadable", type(exc).__name__)
             return []
 
         turns: list[dict[str, Any]] = []
@@ -479,7 +633,11 @@ class TranscriptIdleWatcher:
             try:
                 recovered = self.recover_backlog(limit=self.backlog_limit)
                 if recovered:
-                    print(f"[session-synthesis] startup backlog: {recovered} session(s) submitted")
+                    logger.info(
+                        "[session-synthesis] startup backlog eligible sessions handled=%d; "
+                        "check Harness audit/candidates for accepted requests",
+                        recovered,
+                    )
             except Exception as exc:
                 logger.warning("[session-synthesis] startup backlog failed: %s", exc)
         while True:
@@ -491,7 +649,20 @@ def _default_ledger_path(home: Path, override: str = "") -> Path:
     return Path(override or os.environ.get(LEDGER_ENV, "").strip() or home / DEFAULT_LEDGER)
 
 
-def main() -> None:
+def _configure_logging() -> None:
+    level_name = os.environ.get("BDH_SESSION_SYNTH_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    if not isinstance(level, int):
+        level = logging.INFO
+    logging.basicConfig(
+        level=level,
+        stream=sys.stderr,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    _configure_logging()
     parser = argparse.ArgumentParser()
     parser.add_argument("--db-path", default="")
     parser.add_argument("--state-path", default="")
@@ -512,11 +683,57 @@ def main() -> None:
     )
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args()
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="read-only DB, policy and exact authorization preflight; never POSTs",
+    )
+    authorization = parser.add_mutually_exclusive_group()
+    authorization.add_argument(
+        "--check-actor-handle",
+        metavar="HANDLE",
+        help="preflight this explicitly addressed @handle against the policy",
+    )
+    authorization.add_argument(
+        "--check-default-core",
+        action="store_true",
+        help="preflight the explicit default-profile-to-literal-core policy",
+    )
+    parser.add_argument(
+        "--expect-vault-id",
+        default="",
+        help="require the policy to resolve exactly to this vault ID",
+    )
+    args = parser.parse_args(argv)
     home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+    db_path = args.db_path or home / "state.db"
+    state_path = args.state_path or home / "bdh-session-synthesis-watcher.json"
+
+    if args.check:
+        if not (args.check_actor_handle or args.check_default_core):
+            parser.error("--check requires --check-actor-handle or --check-default-core")
+        if not args.expect_vault_id:
+            parser.error("--check requires --expect-vault-id")
+        if args.check_default_core and args.expect_vault_id != "core":
+            parser.error("--check-default-core requires --expect-vault-id core")
+        watcher = TranscriptIdleWatcher(
+            db_path=db_path,
+            state_path=state_path,
+            threshold_seconds=args.threshold,
+            backlog_limit=0,
+            dry_run=True,
+        )
+        report = watcher.preflight(
+            actor_handle=args.check_actor_handle,
+            default_core=args.check_default_core,
+            expected_vault_id=args.expect_vault_id,
+        )
+        print(json.dumps(report, sort_keys=True), flush=True)
+        return 0 if report["ok"] else 2
+
     watcher = TranscriptIdleWatcher(
-        db_path=args.db_path or home / "state.db",
-        state_path=args.state_path or home / "bdh-session-synthesis-watcher.json",
+        db_path=db_path,
+        state_path=state_path,
         threshold_seconds=args.threshold,
         recover_session_id=args.recover_session_id or None,
         ledger=SynthesisLedger(_default_ledger_path(home, args.ledger_path)),
@@ -524,12 +741,15 @@ def main() -> None:
         dry_run=args.dry_run,
     )
     if args.backlog_once:
-        print(f"backlog submitted: {watcher.recover_backlog(limit=args.backlog_limit)}")
-    elif args.once:
-        print(watcher.scan_once())
-    else:
-        watcher.run_forever(args.interval)
+        handled = watcher.recover_backlog(limit=args.backlog_limit)
+        print(f"backlog eligible sessions handled: {handled}", flush=True)
+        return 0
+    if args.once:
+        print(f"idle transitions handled: {watcher.scan_once()}", flush=True)
+        return 0
+    watcher.run_forever(args.interval)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

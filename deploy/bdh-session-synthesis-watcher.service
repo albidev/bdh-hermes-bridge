@@ -6,6 +6,7 @@ Type=simple
 WorkingDirectory=%h/Projects/bdh-hermes-bridge
 Environment=HERMES_HOME=%h/.hermes
 Environment=PYTHONPATH=%h/Projects/bdh-hermes-bridge
+Environment=PYTHONUNBUFFERED=1
 Environment=BDH_API_URL=http://127.0.0.1:8643
 Environment=BDH_SYNTHESIS_POLICY_FILE=%h/Projects/bdh-hermes-bridge/synthesis-policy.local.json
 Environment=BDH_SESSION_SYNTH_ENABLED=true

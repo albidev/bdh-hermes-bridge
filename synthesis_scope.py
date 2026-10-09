@@ -103,6 +103,11 @@ def _policy_path() -> Path:
     return Path(__file__).resolve().parent / DEFAULT_POLICY_PATH
 
 
+def policy_file_path() -> Path:
+    """Return the operator policy path used by both loading and preflight checks."""
+    return _policy_path()
+
+
 def _registry_path(policy: SynthesisPolicy) -> Path | None:
     raw = os.environ.get(ROOM_REGISTRY_ENV, "").strip() or policy.room_registry_path
     if not raw:
@@ -126,6 +131,27 @@ def _normalise_prefix_map(raw: Any, field_name: str) -> dict[str, str]:
     return result
 
 
+def validate_policy_document(data: Any) -> str | None:
+    """Return a concise schema error for operator policy, or ``None`` when valid."""
+    if not isinstance(data, dict):
+        return "policy must be a JSON object"
+    version = data.get("version", 1)
+    try:
+        if isinstance(version, bool) or int(version) < 1:
+            return "version must be a positive integer"
+    except (TypeError, ValueError):
+        return "version must be a positive integer"
+    for key in ("allow_room_registry", "allow_default_core_sessions"):
+        if key in data and not isinstance(data[key], bool):
+            return f"{key} must be a boolean"
+    for key in ("profile_vaults", "mention_prefixes"):
+        if key in data and data[key] is not None and not isinstance(data[key], Mapping):
+            return f"{key} must be an object"
+    if "room_registry_path" in data and data["room_registry_path"] is not None and not isinstance(data["room_registry_path"], str):
+        return "room_registry_path must be a string"
+    return None
+
+
 def load_policy() -> SynthesisPolicy:
     """Load the local synthesis policy; disabled unless explicitly valid."""
     path = _policy_path()
@@ -137,18 +163,20 @@ def load_policy() -> SynthesisPolicy:
     except (OSError, json.JSONDecodeError, TypeError) as exc:
         logger.warning("[synthesis-scope] invalid policy (%s) — synthesis disabled", exc)
         return _DISABLED
-    if not isinstance(data, dict):
-        logger.warning("[synthesis-scope] policy must be a JSON object — synthesis disabled")
+    error = validate_policy_document(data)
+    if error:
+        logger.warning("[synthesis-scope] invalid policy (%s) — synthesis disabled", error)
         return _DISABLED
 
     return SynthesisPolicy(
         version=int(data.get("version") or 1),
         profile_vaults=_normalise_prefix_map(data.get("profile_vaults"), "profile_vaults"),
         mention_prefixes=_normalise_prefix_map(data.get("mention_prefixes"), "mention_prefixes"),
-        allow_room_registry=bool(data.get("allow_room_registry", True)),
+        allow_room_registry=data.get("allow_room_registry", True),
         room_registry_path=str(data.get("room_registry_path") or "").strip(),
-        allow_default_core_sessions=data.get("allow_default_core_sessions") is True,
+        allow_default_core_sessions=data.get("allow_default_core_sessions", False),
     )
+
 
 
 

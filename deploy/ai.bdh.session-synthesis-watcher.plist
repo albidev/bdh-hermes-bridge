@@ -19,6 +19,8 @@
     <string>__HERMES_HOME__</string>
     <key>PYTHONPATH</key>
     <string>__REPO__</string>
+    <key>PYTHONUNBUFFERED</key>
+    <string>1</string>
     <key>BDH_API_URL</key>
     <string>http://127.0.0.1:8643</string>
     <key>BDH_SESSION_SYNTH_ENABLED</key>

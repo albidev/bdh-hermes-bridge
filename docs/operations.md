@@ -47,7 +47,8 @@ Synthesis audit hashes do not mean there is no raw transcript anywhere: Hermes D
 
 | Workflow | Dry-run effect |
 |---|---|
-| `session_synthesis_watcher.py --dry-run` | Prints prospective submission; returns before POST and before ledger record |
+| `session_synthesis_watcher.py --check --check-actor-handle … --expect-vault-id …` | Validates SessionDB integrity/schema, policy and exact actor→vault route; no message bodies, POST, state-file or ledger writes. A valid empty workload passes. |
+| `session_synthesis_watcher.py --dry-run --backlog-once` | Reconstructs approved idle-session transcripts in memory and prints prospective scope; returns before POST and before session-ledger record |
 | `room_synthesis_watcher.py --dry-run` | Does not POST, **but records the content digest in its configured ledger** |
 | In-process idle/finalize synthesis | Not a watcher dry-run; uses epoch/buffer guards and durable session buffer |
 
@@ -69,7 +70,7 @@ These are advanced commands; missing/invalid actor policy should result in skipp
 
 Do not blindly replay a non-idempotent query POST after an ambiguous timeout. Read back exact synthesis correlation/candidate records. A client error can coexist with a server-side write. Synthesis has its own bounded timeout (`BDH_SESSION_SYNTH_TIMEOUT`: default 300s, clamped 60–600); it is separate from rewrite budget (default/max 15s).
 
-For recovery, back up ledgers and durable buffers first; inspect bounded backlog in an isolated copy; verify outcomes in `.bdh-audit/synthesis.jsonl` and candidate/operation state. Standalone digest deduplication and in-process epoch guards are distinct. Do not run competing watcher processes against the same ledger.
+For recovery, back up ledgers and durable buffers first; inspect bounded backlog in an isolated copy; verify outcomes in `.bdh-audit/synthesis.jsonl` and candidate/operation state. A persisted live→idle transition is not automatically retried if its callback fails; after checking audit for an ambiguous prior POST, use only an explicitly approved bounded recovery. Standalone digest deduplication and in-process epoch guards are distinct and do not cross-deduplicate; prefer one synthesis producer per session scope or review candidate correlation for duplicates. Do not run competing standalone watcher processes against the same ledger.
 
 For backup, stop all relevant writers and preserve the profile's DBs, durable synthesis buffer, idle state, both ledgers, operator policies/indexes/config and the consistent Harness vault/cache/audit snapshot. Protect them as private data. A repo archive is only a code backup.
 

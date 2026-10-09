@@ -24,15 +24,16 @@ The standalone session watcher handles TUI and Mission Control 1:1 sessions. Hos
 
 The setup agent should complete these in order and stop rather than guess whenever an item is unresolved:
 
-1. **Discover, do not mutate:** identify whether the host is macOS or Linux, the intended Hermes home/profile, the actual SessionDB path, bridge checkout, Python interpreter, Harness URL, configured vault IDs, staging flag, and current launchd/systemd user-service state. Do not print secrets.
-2. **Get explicit operator decisions:** which actor/session is authorized, exact destination `vault_id`, whether a small bounded backlog may be submitted at startup, and whether transcript text may be sent to the configured Harness/model providers.
-3. **Prepare local policy:** map an addressed `@handle` to the exact vault ID, or explicitly opt the verified default-profile TUI/Mission Control sessions into the special `core` vault. Do not infer a destination from topic words or vault names.
+1. **Discover, do not mutate:** identify whether the host is macOS or Linux, intended Hermes home/profile, actual SessionDB path, bridge checkout, Python interpreter, Harness URL and vault IDs, staging flag, active synthesis producers, and current launchd/systemd user-service state. Do not print secrets.
+2. **Get explicit operator decisions:** which actor/session is authorized, exact destination `vault_id`, whether a bounded backlog may be submitted at startup, and whether transcript text may be sent to configured Harness/model providers.
+3. **Resolve the destination before enabling:** for a 1:1 session use an explicitly addressed actor mapping to an existing exact vault ID; use default-profile opt-in only for literal `core`. If no `core` vault exists, stop and choose an addressed actor or provision/verify an explicitly approved `core` vault. Never substitute the Harness default or infer from topic.
 4. **Verify staging and provider policy:** if the requirement is “no automatic Markdown publication,” confirm `session_synthesis_staging_enabled: true` for the target vault in the running Harness. Separately inspect all other enabled write paths; this setting only gates session-synthesis application.
-5. **Run a dry-run:** use the real intended policy and SessionDB but `--dry-run --backlog-once` with a bounded limit. Review every printed destination/count. Dry-run must not POST or update the session watcher ledger.
-6. **Render and validate the platform service:** use the launchd plist on macOS or the systemd user unit on Linux; replace/verify all paths before activation.
-7. **Activate only after approval:** load/enable only `ai.bdh.session-synthesis-watcher`; do not restart a Hermes gateway or Harness for this step.
-8. **Verify live behavior:** verify the label/process, logs, authorized vault, audit correlation and pending-review candidate. A PID or ledger row alone is not proof that a candidate was staged.
-9. **Report the open state:** record whether backlog recovery was enabled, which vault was authorized (ID only), checks performed, and remaining limitations. Never report a candidate as published unless Markdown was read back and verified.
+5. **Run the non-writing preflight:** verify DB readability/schema and exact actor→vault resolution with `--check`; a valid DB with zero sessions is a pass, unlike a missing/invalid DB. No message bodies are read or emitted.
+6. **Run an optional bounded dry-run:** use `--dry-run --backlog-once` only if the operator approves inspecting already-idle session transcripts. Review every printed vault/count; it must not POST or update the session ledger.
+7. **Render and validate the platform service:** use launchd on macOS or the systemd user unit on Linux; replace/verify all paths before activation.
+8. **Activate only after approval:** load/enable only `ai.bdh.session-synthesis-watcher`; do not restart a Hermes gateway or Harness for this step.
+9. **Verify live behavior:** check service state, logs, authorized vault, audit correlation and pending-review candidate. A PID or ledger row alone is not proof that a candidate was staged.
+10. **Report the open state:** record backlog policy, authorized vault ID, checks performed, active competing synthesis producers and remaining limitations. Never report a candidate as published unless Markdown was read back and verified.
 
 ## 3. Prerequisites and read-only discovery
 
@@ -91,11 +92,39 @@ This special case is only for a session verified by the watcher to be in the sel
 }
 ```
 
-The destination is the literal vault ID `core`; this flag does not authorize arbitrary vaults, secondary profile DBs, rooms, cron sessions, or unknown/ambiguous `@handles`. Do not use it as a generic “allow all sessions” switch.
+The destination is the literal vault ID `core`. This opt-in works only if that exact vault is provisioned and returned by the live Harness `/api/vaults` response. If the deployment has no `core` ID, **do not** substitute the Harness default or another vault: either explicitly provision and verify an approved `core` vault, or use Option A to map an addressed actor to an existing vault. This flag does not authorize arbitrary vaults, secondary profile DBs, rooms, cron sessions, or unknown/ambiguous `@handles`. Do not use it as a generic “allow all sessions” switch.
 
 For other session/room authorization patterns, inspect `synthesis_scope.py` and `deploy/README.md`; do not assume `profile_vaults` grants arbitrary 1:1 sessions. The actor resolver is intentionally stricter than retrieval routing.
 
-Store policy as UTF-8 JSON, mode-restrict it to the operator, and keep it out of version control. Verify it parses and resolves the intended test session before activating the service. Never add production transcript text to test fixtures.
+Store policy as UTF-8 JSON, mode-restrict it to the operator, and keep it out of version control. Never add production transcript text to test fixtures.
+
+### Non-writing setup preflight (required before service activation)
+
+The preflight validates every discovered SessionDB read-only (SQLite integrity and required schema), reports a valid zero-session workload distinctly from a missing/invalid DB, loads the policy and checks an exact authorization route. It reads **no message bodies**, does not contact BDH, and does not create/update idle state or a digest ledger. Use the exact vault ID already verified from the running Harness `/api/vaults` response:
+
+```bash
+REPO="$HOME/Projects/bdh-hermes-bridge"
+PYTHON="$HOME/.hermes/hermes-agent/venv/bin/python"  # use the installed Hermes interpreter
+export HERMES_HOME="$HOME/.hermes"
+export BDH_SYNTHESIS_POLICY_FILE="$REPO/synthesis-policy.local.json"
+export PYTHONPATH="$REPO"
+
+"$PYTHON" "$REPO/session_synthesis_watcher.py" \
+  --check --check-actor-handle ASTERION_HANDLE \
+  --expect-vault-id EXACT_VAULT_ID
+```
+
+For the special default-profile case, the explicit policy check is:
+
+```bash
+"$PYTHON" "$REPO/session_synthesis_watcher.py" \
+  --check --check-default-core --expect-vault-id core
+```
+
+The second command verifies only the literal `core` policy route. The service still authorizes a real session only if it came from the verified default DB with `profile_name=default` and source `tui` or `mission-control`. Neither command processes history or posts anything. Exit `0` means DBs, policy and requested exact route passed; non-zero JSON output distinguishes DB/policy/authorization failures. Review the report and stop on any vault mismatch. This check proves the configured mapping, not that a future session contains the addressed handle; use the optional dry-run below when the operator separately approves inspection of an existing idle session.
+
+A valid empty SessionDB is **not** an error: report `open_sessions: 0` and proceed only if the exact route check passes. Missing, unreadable, corrupt or schema-incompatible databases, absent/invalid policy, unresolved actor, or mismatched vault ID are stop conditions.
+
 
 ## 5. Configure the Harness before enabling writes
 
@@ -113,9 +142,10 @@ If the requirement is no automatic Markdown publication by **any** path, also au
 
 If transcript/model processing must stay local, configure the Harness source override explicitly, e.g. `llm_source_overrides.session_synthesis` with a local `ollama` or `omlx` provider, a real served model, loopback `base_url`, `local_only: true`, and no fallbacks. Verify embeddings separately. Do not infer locality from a missing fallback or from `BDH_API_URL` being localhost: the Harness may call a remote model provider.
 
-## 6. Dry-run before activation
+## 6. Optional session dry-run (only with approved history inspection)
 
-Use a bounded backlog dry-run first. It reads and reconstructs eligible sessions, prints the resolved vault ID, turn count and digest prefix, but does **not** POST or record the session digest. Use a small limit; the normal startup backlog is bounded to three by default.
+The setup preflight above is the positive non-writing test; do not use `--backlog-limit 0` as a substitute because it cannot select any session. If—and only if—the operator separately approves inspecting already-idle session history, use a bounded dry-run. It reconstructs transcripts in memory to print the resolved vault, turn count and digest prefix, but does **not** POST or record the session digest. Do not send the printed output if session IDs or vault metadata are sensitive.
+
 
 ```bash
 cd "$REPO"
@@ -128,9 +158,9 @@ env HERMES_HOME="$HERMES_HOME" \
   --dry-run --backlog-once --backlog-limit 3
 ```
 
-Expected outcome: only explicitly authorized sessions appear, each with the intended vault ID; no unauthorized/default-fallback session appears. Any unexpected target, missing policy, ambiguous actor, unreadable SessionDB, or output containing data the operator did not approve is a **stop condition**. No POST should occur in dry-run mode.
+Expected outcome: only explicitly authorized sessions appear, each with the intended vault ID; no unauthorized/default-fallback session appears. Any unexpected target, missing policy, ambiguous actor, unreadable SessionDB, or output containing data the operator did not approve is a **stop condition**. No POST or ledger write should occur in dry-run mode.
 
-For a fresh install where no historical session should be considered, first dry-run with `--backlog-limit 0`. The live idle trigger only handles observed live→idle transitions; already-idle sessions need a later explicitly approved bounded backlog pass to be recovered.
+
 
 ## 7. macOS: render and install the session LaunchAgent
 
@@ -162,7 +192,7 @@ PY
 plutil -lint "$PLIST_OUT"
 ```
 
-Before `bootstrap`, read the rendered plist and verify every executable/path/env value. It must include the intended `HERMES_HOME`, `PYTHONPATH`, `BDH_API_URL`, `BDH_SYNTHESIS_POLICY_FILE`, `BDH_SESSION_SYNTH_ENABLED=true` and a **session-only** `BDH_SESSION_SYNTHESIS_LEDGER_FILE`. Keep the session and room watcher ledgers separate.
+Before `bootstrap`, read the rendered plist and verify every executable/path/env value. It must include the intended `HERMES_HOME`, `PYTHONPATH`, `PYTHONUNBUFFERED=1`, `BDH_API_URL`, `BDH_SYNTHESIS_POLICY_FILE`, `BDH_SESSION_SYNTH_ENABLED=true` and a **session-only** `BDH_SESSION_SYNTHESIS_LEDGER_FILE`. Keep the session and room watcher ledgers separate.
 
 The template performs a bounded startup backlog of up to three sessions. For a no-backlog first activation, add these two arguments to `ProgramArguments` in the **rendered local plist** before the interval:
 
@@ -202,7 +232,7 @@ mkdir -p "$UNIT_DIR" "$HOME/.hermes"
 install -m 600 "$REPO/deploy/bdh-session-synthesis-watcher.service" "$UNIT"
 ```
 
-Before enabling, edit the installed unit if any assumed path differs, and inspect the rendered values. The policy and ledger paths must be private and distinct from the room watcher's. Validate and start it as the unprivileged target user:
+Before enabling, edit the installed unit if any assumed path differs, and inspect the rendered values. Verify `PYTHONUNBUFFERED=1`, the explicit policy file, session-only ledger path, correct interpreter, and `--backlog-limit 0`. The unit runs unprivileged with `UMask=0077`; its output and INFO/WARNING/ERROR diagnostics go to the user journal without transcript bodies. Keep the session and room watcher ledgers distinct.
 
 ```bash
 systemd-analyze --user verify "$UNIT"
@@ -227,7 +257,7 @@ After unit changes, run `systemctl --user daemon-reload` and restart this unit o
 Verify each layer independently:
 
 1. **Service manager:** on macOS, `launchctl print` shows the expected program and environment; on Linux, `systemctl --user status` shows the correct active unit. Check the process and the configured stdout/stderr or journal logs.
-2. **Policy:** logs show unauthorized sessions skipped; there must be no fallback to the Harness default vault for an unauthorized session.
+2. **Policy and database observability:** standalone entrypoint logging defaults to INFO and writes transcript-free diagnostics to stderr/journal. Unauthorized actor skips are INFO; missing/invalid SessionDB reads are ERROR (once per distinct error state, with recovery logged). Distinguish a valid zero-session count from database failure in `--check` JSON output.
 3. **Harness:** confirm `session_synthesis_staging_enabled` for that vault before a real request. Check health/stats and the candidate endpoint without exposing note or transcript text.
 4. **After an approved test session becomes idle:** check Harness synthesis audit and the exact candidate's status/source/vault. Expect `source=session_synthesis` and `pending_review`; a candidate is not yet a published note.
 5. **No Markdown publication:** compare the target vault Markdown inventory/hashes before and after the test. Candidate staging may create operational JSON under the staging directory; it must not change curated `.md` notes.
@@ -235,7 +265,26 @@ Verify each layer independently:
 
 A watcher PID, clean log, incremented ledger, HTTP 200, or non-empty synthesis response alone does not prove correct scope or candidate staging. Read back the exact authorized candidate and intended Markdown target before any approval/merge.
 
-The watcher idle detector is transition-based. It notices a live session becoming idle while the watcher is running. The startup backlog is a separate bounded recovery path for sessions already idle before startup. `--once` only scans for transitions; to inspect already-idle sessions use `--dry-run --backlog-once` with a fresh review and a small limit.
+The idle detector is transition-based: it notices a live session becoming idle while the watcher is running. It persists that transition **before** invoking the synthesis callback. If the callback fails, that same live→idle edge is not automatically retried after restart; this is not an exactly-once or eventual-delivery guarantee. Startup backlog is a separate bounded recovery path for sessions already idle before startup and for a manually reviewed recovery. `--once` only scans transitions; to inspect already-idle sessions use `--dry-run --backlog-once` with operator approval.
+
+For a failed callback or missed transition, first inspect the Harness synthesis audit/candidate for the exact session and correlation. If outcome is known not accepted, use an explicitly approved bounded recovery; if POST acceptance is ambiguous (timeout/reset), **do not replay automatically**—read the audit/candidate state first. Preserve the production digest ledger; it records accepted transcript digests and must not be erased to force a retry.
+
+Only after that read-back, an operator may explicitly authorize a one-shot recovery (example limit one):
+
+```bash
+cd "$REPO"
+env HERMES_HOME="$HERMES_HOME" \
+  BDH_API_URL="$BDH_API_URL" \
+  BDH_SYNTHESIS_POLICY_FILE="$REPO/synthesis-policy.local.json" \
+  BDH_SESSION_SYNTH_ENABLED=true \
+  BDH_SESSION_SYNTHESIS_LEDGER_FILE="$HERMES_HOME/bdh-session-synthesis-ledger.json" \
+  PYTHONPATH="$REPO" PYTHONUNBUFFERED=1 \
+  "$PYTHON" session_synthesis_watcher.py --backlog-once --backlog-limit 1
+```
+
+This is a **write** operation; it may submit a synthesis request and create a candidate. Do not use it to probe configuration or to replay an ambiguous POST.
+
+The standalone watcher ledger deduplicates only its own producer. It does not share deduplication state with the bridge's in-process idle/finalize buffer/epoch guards. If both producers can see the same session scope, they may stage duplicate syntheses. Prefer one producer per scope; otherwise monitor candidate correlation and review duplicates—do not claim cross-producer deduplication.
 
 ## 10. Stop, disable, rollback
 
@@ -257,10 +306,14 @@ For rollback after an unexpected candidate or write: stop the watcher first; pre
 
 | Symptom | Likely check |
 |---|---|
-| Agent is running but no synthesis occurs | Policy absent/invalid, session source not `tui`/`mission-control`, no observed live→idle transition, below `BDH_SESSION_SYNTH_MIN_TURNS`, unresolved actor/vault, or session already recorded in ledger. Try bounded dry-run backlog. |
+| Agent is running but no synthesis occurs | Policy absent/invalid, session source not `tui`/`mission-control`, no observed live→idle transition, below `BDH_SESSION_SYNTH_MIN_TURNS`, unresolved actor/vault, or session already recorded in ledger. Check `--check` before inspecting history. |
+| Preflight reports database_missing | Verify the selected `HERMES_HOME`, `--db-path`, profile DB locations and OS-user read permissions. Do not proceed as if zero sessions. |
+| Preflight reports invalid_or_unreadable | Inspect DB integrity/schema, file permissions, and SQLite/WAL health; do not print or copy transcripts. |
+| Preflight reports policy_missing / policy_invalid / no_authorized_routes | Verify `BDH_SYNTHESIS_POLICY_FILE`, valid JSON and an explicit route; never substitute default Harness routing. |
+| Preflight reports authorization_unresolved / vault_mismatch | Fix the explicit actor handle→vault mapping or select literal `core` only for the documented default-profile case. Stop if the resolved ID differs from the operator-approved ID. |
 | Default profile session is skipped | Expected unless the verified default DB + profile/source gate is satisfied and `allow_default_core_sessions: true` is explicitly configured. |
 | A client/project 1:1 session is skipped | Add an explicit addressed `@handle` → exact vault mapping; do not authorize by topic or assume profile identity is enough. |
-| Wrong vault appears in dry-run | Stop. Correct the policy/handle/vault ID; do not bootstrap. |
+| Wrong vault appears in dry-run | Stop. Correct the policy/handle/vault ID; do not activate the service. |
 | Process exits/restarts repeatedly | On macOS, check `launchctl print` and plist lint; on Linux, check `systemctl --user status` and `systemd-analyze --user verify`. Check executable/imports, HOME/PYTHONPATH, file permissions and stderr/journal logs. |
 | HTTP/API failure | Check the exact `BDH_API_URL`, Harness `/health`, selected vault, and provider availability. Do not replay ambiguous POSTs. |
 | Candidate not visible | Confirm request reached Harness audit, staging is enabled on the target vault, and use the corresponding `synthesis_id`/session correlation. A ledger row alone is insufficient. |
