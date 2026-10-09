@@ -1,5 +1,7 @@
 # Watcher deployment
 
+For an end-to-end, agent-oriented setup of the standalone session watcher, including authorization, dry-run, backlog safety and verification, start with [the session watcher setup runbook](../docs/session-watcher-setup.md). This page remains the low-level template reference for both launchd agents.
+
 Both watchers are `launchd` agents. The plists in this directory are
 **templates**: they use `__PYTHON__`, `__REPO__`, `__HERMES_HOME__` and
 `__ROOM_REGISTRY__` placeholders instead of machine paths, so the repository

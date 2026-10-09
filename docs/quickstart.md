@@ -59,7 +59,7 @@ If imports fail, use the correct Hermes interpreter rather than adding arbitrary
 2. Install/enable `bdh-hermes-bridge` in that profile using its `plugins.enabled` list. The manifest registers six hooks and two tools; the optional idle watcher is bridge-owned, not a Hermes `on_session_idle` registration.
 3. Set `BDH_API_URL` for the **owning process** and review deterministic vault mapping. Feature flags are read at import/startup; changing a shell export does not update a running gateway.
 4. Review [operations/privacy](operations.md) and [synthesis](session-synthesis.md) before any real turns. A local deployment is an operator choice, not a hard-coded privacy guarantee. Explicitly select `llm.local_only` / source overrides in Harness if required.
-5. Optional rewrite and synthesis are separate features; enable one at a time only after reviewing data flow. Standalone room/session watchers additionally require actor authorization and are not a prerequisite for basic tools.
+5. The standalone room/session watchers are an optional advanced deployment, not a prerequisite for basic tools. For the complete agent-oriented session watcher procedure (actor policy, dry-run, safe backlog settings, LaunchAgent, verification and rollback), use [session watcher setup](session-watcher-setup.md); the low-level [watcher deployment templates](../deploy/README.md) are for operators rendering the agents.
 6. New plugin code/config loads in a new owning process. Restart only that test profile's process after approval—never another user's gateway by habit.
 
 Remove the isolated plugin/config or retain the disposable root for debugging. Nothing here authorizes deleting your real Hermes home or BDH vault.

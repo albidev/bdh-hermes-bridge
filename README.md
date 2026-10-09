@@ -57,6 +57,8 @@ When `BDH_SESSION_SYNTH_ENABLED=true`, the bridge buffers safe turns and submits
 
 Since v0.11.0, the bridge also uses a bridge-owned idle watcher (no Hermes `on_session_idle` registration) with an **epoch-aware, non-destructive idle flush**: when a session goes idle with enough buffered turns, the bridge stages one candidate synthesis for the current epoch without resetting the session. A later turn starts a new epoch, eligible for its own idle/finalize flush. Finalize/reset remain authoritative fallbacks.
 
+For the separate **standalone SessionDB watcher**—installation, authorization policy, safe dry-run, LaunchAgent activation, verification and rollback—follow the [agent-oriented setup runbook](docs/session-watcher-setup.md). Do not confuse this daemon with enabling the bridge plugin or its in-process synthesis flag.
+
 The request extracts durable decisions, architecture choices, and lessons learned instead of copying transient conversation noise. The deterministic turn scope is propagated to per-turn writes and synthesis; semantic overlay hints are retrieval-only and are not write authority. Mixed-vault buffers are rejected. The synthesis is asynchronous and never changes the current answer. Each synthesis request carries audit metadata (`synthesis_id`, `session_id`, `queued_at`, `transcript_sha256`, `accepted_count`, `context_only_count`) so downstream consumers can correlate requests without storing the raw transcript. See the detailed [session-end synthesis documentation](docs/session-synthesis.md), including lifecycle, scope isolation, configuration, model selection, and verification.
 
 ### Query classification + rewrite pipeline (v0.8.0, opt-in)

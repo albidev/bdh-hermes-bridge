@@ -26,7 +26,7 @@ python -m pip install -r requirements-ci.txt
 python -c 'import importlib.metadata as m; print(m.version("hermes-agent"))'
 ```
 
-Use that interpreter for the isolated discovery/stats [quickstart](quickstart.md). Dependencies belong to this disposable environment, not the active Hermes runtime. For suite commands, see [README tests](../README.md#tests).
+Use that interpreter for the isolated discovery/stats [quickstart](quickstart.md). Dependencies belong to this disposable environment, not the active Hermes runtime. For the suite command, see the [CI workflow](../.github/workflows/ci.yml).
 
 ## Before an alpha release
 
