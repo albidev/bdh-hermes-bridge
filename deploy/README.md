@@ -14,7 +14,7 @@ the checkout moves (a worktree path, a rename, a second machine).
 
 | Agent | Script | Purpose |
 |---|---|---|
-| `ai.bdh.session-synthesis-watcher` | `session_synthesis_watcher.py` | idle TUI / Mission Control sessions |
+| `ai.bdh.session-synthesis-watcher` | `session_synthesis_watcher.py` | idle TUI / Mission Control / Desktop sessions |
 | `ai.bdh.room-synthesis-watcher` | `room_synthesis_watcher.py` | hosted group rooms |
 
 Install by rendering a template into `~/Library/LaunchAgents/` and bootstrapping
@@ -64,10 +64,10 @@ daemon whose working directory differs still finds it. Prefer an explicit
 ### Core sessions (explicit opt-in)
 
 The default Hermes profile is not a client actor. To let its idle TUI/Mission
-Control sessions stage candidates in the **Core** vault, set
+Control/Desktop sessions stage candidates in the **Core** vault, set
 `"allow_default_core_sessions": true` in the local gitignored policy file.
 This applies only when the session is found in the default `state.db`, has
-`profile_name=default`, and has source `tui` or `mission-control`. An addressed
+`profile_name=default`, and has source `tui`, `mission-control` or `desktop`. An addressed
 `@handle` takes precedence; unknown/ambiguous handles, secondary profile
 DBs, rooms, and cron sessions never fall back to Core. The flag defaults to
 false; it does not enable an implicit target for other profiles.

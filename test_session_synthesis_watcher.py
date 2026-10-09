@@ -210,9 +210,10 @@ def test_watcher_rebuilds_conservative_pairs(tmp_path, monkeypatch):
     ]
 
 
-def test_watcher_routes_opted_in_default_profile_session_to_core(tmp_path, monkeypatch):
+@pytest.mark.parametrize("source", ["tui", "mission-control", "desktop"])
+def test_watcher_routes_opted_in_default_profile_session_to_core(tmp_path, monkeypatch, source):
     db_path = tmp_path / "state.db"
-    _db(db_path, profile_name="default")
+    _db(db_path, source=source, profile_name="default")
     policy_file = tmp_path / "policy.json"
     policy_file.write_text(
         '{"version": 2, "allow_default_core_sessions": true, '
@@ -229,6 +230,11 @@ def test_watcher_routes_opted_in_default_profile_session_to_core(tmp_path, monke
     ("tui", "default", "ask @unknown about", None),
     ("mission-control", "client-a", "decision", None),
     ("cron", "default", "decision", None),
+    ("desktop", "default", "ask @client-a about", "vault-a"),
+    ("desktop", "default", "ask @unknown about", None),
+    ("desktop", "default", "ask @client-a and @client-b about", None),
+    ("desktop", "client-a", "decision", None),
+    ("desktop", None, "decision", None),
 ])
 def test_default_core_opt_in_never_overrides_actor_or_source(
     tmp_path, monkeypatch, source, profile, user_text, expected,
@@ -238,7 +244,7 @@ def test_default_core_opt_in_never_overrides_actor_or_source(
     policy_file = tmp_path / "policy.json"
     policy_file.write_text(json.dumps({
         "allow_default_core_sessions": True,
-        "mention_prefixes": {"client-a": "vault-a"},
+        "mention_prefixes": {"client-a": "vault-a", "client-b": "vault-b"},
         "profile_vaults": {"client-a": "vault-a"},
         "allow_room_registry": False,
     }), encoding="utf-8")
@@ -248,12 +254,13 @@ def test_default_core_opt_in_never_overrides_actor_or_source(
     assert {turn["vault_id"] for turn in watcher.rebuild_turns("s1")} == {expected}
 
 
-def test_default_core_opt_in_rejects_secondary_database(tmp_path, monkeypatch):
+@pytest.mark.parametrize("source", ["tui", "mission-control", "desktop"])
+def test_default_core_opt_in_rejects_secondary_database(tmp_path, monkeypatch, source):
     home = tmp_path / ".hermes"
     secondary = home / "profiles" / "other" / "state.db"
     secondary.parent.mkdir(parents=True)
-    _db(home / "state.db", session_id="primary", profile_name="default")
-    _db(secondary, session_id="secondary", profile_name="default")
+    _db(home / "state.db", session_id="primary", source=source, profile_name="default")
+    _db(secondary, session_id="secondary", source=source, profile_name="default")
     policy_file = tmp_path / "policy.json"
     policy_file.write_text('{"allow_default_core_sessions": true}', encoding="utf-8")
     monkeypatch.setenv("BDH_SYNTHESIS_POLICY_FILE", str(policy_file))
@@ -354,7 +361,8 @@ def test_watcher_reads_secondary_profile_databases(tmp_path, monkeypatch):
     assert default_turns and all(t["vault_id"] is None for t in default_turns)
 
 
-def test_unauthorised_session_is_skipped_not_flushed_without_a_vault(tmp_path, monkeypatch):
+@pytest.mark.parametrize("source", ["tui", "mission-control", "desktop"])
+def test_unauthorised_session_is_skipped_not_flushed_without_a_vault(tmp_path, monkeypatch, source):
     """A no-vault flush is not safe: BDH would route it to its own default.
 
     Skipping is the only fail-closed outcome, because the gate authorises by
@@ -362,7 +370,7 @@ def test_unauthorised_session_is_skipped_not_flushed_without_a_vault(tmp_path, m
     vault the server defaults to.
     """
     db_path = tmp_path / "state.db"
-    _db(db_path, profile_name="default")
+    _db(db_path, source=source, profile_name="default")
     monkeypatch.setenv("BDH_SYNTHESIS_POLICY_FILE", str(tmp_path / "absent.json"))
     watcher = TranscriptIdleWatcher(db_path=db_path, state_path=tmp_path / "idle.json")
 
@@ -615,3 +623,72 @@ def test_the_same_session_flushes_when_the_floor_allows_it(tmp_path, monkeypatch
 
     assert flushed_low == []
     assert [call[-1] for call in flushed_ok] == ["s1"]
+
+
+@pytest.mark.parametrize("source,ended,expected", [
+    ("tui", False, True),
+    ("mission-control", False, True),
+    ("desktop", False, True),
+    ("desktop", True, False),
+    ("bot_room", False, False),
+    ("cron", False, False),
+    ("unknown", False, False),
+])
+def test_watcher_selects_only_open_profile_served_sessions(tmp_path, source, ended, expected):
+    db_path = tmp_path / "state.db"
+    _db(db_path, source=source)
+    if ended:
+        with sqlite3.connect(db_path) as db:
+            db.execute("UPDATE sessions SET ended_at = 1200.0")
+    watcher = TranscriptIdleWatcher(db_path=db_path, state_path=tmp_path / "idle.json")
+
+    assert watcher.session_activity() == ({"s1": 1000.0} if expected else {})
+
+
+@pytest.mark.parametrize("source", ["tui", "mission-control", "desktop"])
+def test_profile_session_idle_transition_flushes_authorised_turns(tmp_path, monkeypatch, source):
+    db_path = tmp_path / "state.db"
+    _db(db_path, source=source, profile_name="default", user_text="ask @client-a about")
+    watcher, flushed = _watcher_with_stub_bridge(db_path, tmp_path, monkeypatch)
+    import __init__ as bridge_mod
+    monkeypatch.setattr(bridge_mod, "_SESSION_SYNTH_MIN_TURNS", 1)
+
+    assert watcher.scan_once(now=1100.0) == 0
+    assert watcher.scan_once(now=1400.0) == 1
+    assert watcher.scan_once(now=1500.0) == 0
+    assert [call[-1] for call in flushed] == ["s1"]
+    assert {turn["vault_id"] for turn in watcher.bridge._session_buffers["s1"]} == {"vault-a"}
+
+
+@pytest.mark.parametrize("source", ["tui", "mission-control", "desktop"])
+def test_default_core_backlog_dry_run_never_flushes_or_records(tmp_path, monkeypatch, capsys, source):
+    from synthesis_ledger import SynthesisLedger
+    import __init__ as bridge_mod
+
+    db_path = tmp_path / "state.db"
+    _db(db_path, source=source, profile_name="default")
+    db_before = db_path.read_bytes()
+    policy_file = tmp_path / "policy.json"
+    policy_file.write_text('{"allow_default_core_sessions": true}', encoding="utf-8")
+    monkeypatch.setenv("BDH_SYNTHESIS_POLICY_FILE", str(policy_file))
+    monkeypatch.setattr(bridge_mod, "_SESSION_SYNTH_MIN_TURNS", 1)
+
+    def forbidden_flush(*args, **kwargs):
+        pytest.fail("dry-run must not dispatch synthesis")
+
+    monkeypatch.setattr(bridge_mod, "_flush_session_synthesis", forbidden_flush)
+    ledger_path = tmp_path / "ledger.json"
+    idle_path = tmp_path / "idle.json"
+    watcher = TranscriptIdleWatcher(
+        db_path=db_path, state_path=idle_path,
+        ledger=SynthesisLedger(ledger_path), dry_run=True,
+    )
+    watcher.bridge = bridge_mod
+
+    assert watcher.recover_backlog(limit=1, now=1400.0) == 1
+    output = capsys.readouterr().out
+    assert "[dry-run] session s1:" in output
+    assert "vault='core' turns=3" in output
+    assert not ledger_path.exists()
+    assert not idle_path.exists()
+    assert db_path.read_bytes() == db_before

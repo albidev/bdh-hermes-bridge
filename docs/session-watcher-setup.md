@@ -2,7 +2,7 @@
 
 This runbook is for an operator or setup agent installing the **standalone session watcher** on macOS or Linux. It is deliberately separate from enabling the bridge plugin in a chat gateway.
 
-The watcher reads Hermes session databases read-only, waits for eligible TUI/Mission Control sessions to become idle, reconstructs bounded user/assistant turns, authorizes a destination vault from actor policy, and submits one `source=session_synthesis` request to BDH. It does not edit Hermes core. With Harness staging enabled, the request becomes a review candidate rather than an automatically published Markdown note.
+The watcher reads Hermes session databases read-only, waits for eligible TUI/Mission Control/Desktop sessions to become idle, reconstructs bounded user/assistant turns, authorizes a destination vault from actor policy, and submits one `source=session_synthesis` request to BDH. It does not edit Hermes core. With Harness staging enabled, the request becomes a review candidate rather than an automatically published Markdown note.
 
 > **Do not begin by loading the LaunchAgent.** First establish the exact Hermes home, vault ID, authorization policy, Harness staging behavior, and the expected data flow. A missing or ambiguous authorization must mean “skip synthesis.”
 
@@ -18,7 +18,9 @@ There are three related but independent paths:
 
 Do not enable the plugin or turn on conversation hooks merely to test the standalone watcher. Conversely, setting `BDH_SESSION_SYNTH_ENABLED=true` in a shell does not start a daemon. The macOS LaunchAgent or Linux systemd user service has its own environment and must be activated for the correct OS user and Hermes home.
 
-The standalone session watcher handles TUI and Mission Control 1:1 sessions. Hosted rooms use the separate room watcher and room registry; do not point both at the same ledger.
+The standalone session watcher handles TUI, Mission Control and Desktop 1:1 sessions. Hosted rooms use the separate room watcher and room registry; do not point both at the same ledger.
+
+Desktop sessions use the persisted SessionDB source `desktop`; no Desktop UI or Hermes core changes are needed. Adding this source does not authorize synthesis by itself: the same actor policy applies. **On upgrade, an existing actor mapping or `allow_default_core_sessions: true` may make previously ignored Desktop sessions eligible**, including the bounded startup backlog. Run the non-writing `--check` preflight before restarting an existing watcher; inspect a bounded history dry-run only with separate operator approval. Use `--backlog-limit 0` to disable historical submissions, not as a substitute for the positive preflight.
 
 ## 2. Agent procedure and stop gates
 
@@ -59,7 +61,7 @@ curl --fail --silent --show-error "$BDH_API_URL/api/vaults"
 
 If profiles are used, inspect `$HERMES_HOME/profiles/*/state.db` as well. The watcher discovers profile databases below the selected Hermes home. Do not use a different user's home or a production DB just because it is convenient. Do not dump session contents into logs or chat.
 
-The watcher’s default inputs are `$HERMES_HOME/state.db` and `$HERMES_HOME/bdh-session-synthesis-watcher.json`; it opens SessionDB read-only. It considers session sources `tui` and `mission-control`, reconstructs completed turns, ignores tool/system rows as separate turns, and skips truncated responses. It polls at the configured interval (60 seconds in the template); default idle threshold is 300 seconds, with a 30-second lower clamp.
+The watcher’s default inputs are `$HERMES_HOME/state.db` and `$HERMES_HOME/bdh-session-synthesis-watcher.json`; it opens SessionDB read-only. It considers session sources `tui`, `mission-control` and `desktop`, reconstructs completed turns, ignores tool/system rows as separate turns, and skips truncated responses. It polls at the configured interval (60 seconds in the template); default idle threshold is 300 seconds, with a 30-second lower clamp.
 
 ## 4. Choose an authorization policy
 
@@ -83,7 +85,7 @@ The session must contain the addressed handle in a user message for the actor ga
 
 ### Option B: explicitly authorize default-profile sessions to Core
 
-This special case is only for a session verified by the watcher to be in the selected default `state.db`, with `profile_name=default` and source `tui` or `mission-control`:
+This special case is only for a session verified by the watcher to be in the selected default `state.db`, with `profile_name=default` and source `tui`, `mission-control` or `desktop`:
 
 ```json
 {
@@ -121,7 +123,7 @@ For the special default-profile case, the explicit policy check is:
   --check --check-default-core --expect-vault-id core
 ```
 
-The second command verifies only the literal `core` policy route. The service still authorizes a real session only if it came from the verified default DB with `profile_name=default` and source `tui` or `mission-control`. Neither command processes history or posts anything. Exit `0` means DBs, policy and requested exact route passed; non-zero JSON output distinguishes DB/policy/authorization failures. Review the report and stop on any vault mismatch. This check proves the configured mapping, not that a future session contains the addressed handle; use the optional dry-run below when the operator separately approves inspection of an existing idle session.
+The second command verifies only the literal `core` policy route. The service still authorizes a real session only if it came from the verified default DB with `profile_name=default` and source `tui`, `mission-control` or `desktop`. Neither command processes history or posts anything. Exit `0` means DBs, policy and requested exact route passed; non-zero JSON output distinguishes DB/policy/authorization failures. Review the report and stop on any vault mismatch. This check proves the configured mapping, not that a future session contains the addressed handle; use the optional dry-run below when the operator separately approves inspection of an existing idle session.
 
 A valid empty SessionDB is **not** an error: report `open_sessions: 0` and proceed only if the exact route check passes. Missing, unreadable, corrupt or schema-incompatible databases, absent/invalid policy, unresolved actor, or mismatched vault ID are stop conditions.
 
@@ -306,7 +308,7 @@ For rollback after an unexpected candidate or write: stop the watcher first; pre
 
 | Symptom | Likely check |
 |---|---|
-| Agent is running but no synthesis occurs | Policy absent/invalid, session source not `tui`/`mission-control`, no observed live→idle transition, below `BDH_SESSION_SYNTH_MIN_TURNS`, unresolved actor/vault, or session already recorded in ledger. Check `--check` before inspecting history. |
+| Agent is running but no synthesis occurs | Policy absent/invalid, session source not `tui`/`mission-control`/`desktop`, no observed live→idle transition, below `BDH_SESSION_SYNTH_MIN_TURNS`, unresolved actor/vault, or session already recorded in ledger. Check `--check` before inspecting history. |
 | Preflight reports database_missing | Verify the selected `HERMES_HOME`, `--db-path`, profile DB locations and OS-user read permissions. Do not proceed as if zero sessions. |
 | Preflight reports invalid_or_unreadable | Inspect DB integrity/schema, file permissions, and SQLite/WAL health; do not print or copy transcripts. |
 | Preflight reports policy_missing / policy_invalid / no_authorized_routes | Verify `BDH_SYNTHESIS_POLICY_FILE`, valid JSON and an explicit route; never substitute default Harness routing. |

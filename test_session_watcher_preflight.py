@@ -205,3 +205,29 @@ def test_session_activity_logs_database_failures_without_transcript_content(
     assert "invalid_or_unreadable" in caplog.text
     assert "state.db" in caplog.text
     assert "not sqlite" not in caplog.text
+
+
+def test_preflight_counts_open_desktop_sessions_without_writing_state(tmp_path, monkeypatch):
+    db_path = tmp_path / "state.db"
+    _valid_empty_db(db_path)
+    with sqlite3.connect(db_path) as db:
+        db.executemany(
+            "INSERT INTO sessions VALUES (?, ?, 'default', 1000.0, ?)",
+            [
+                ("desktop-open", "desktop", None),
+                ("desktop-ended", "desktop", 1200.0),
+                ("room", "bot_room", None),
+                ("cron", "cron", None),
+            ],
+        )
+    before = db_path.read_bytes()
+    ledger_path = tmp_path / "ledger.json"
+    watcher = _watcher(tmp_path, monkeypatch, ledger=SynthesisLedger(ledger_path))
+
+    report = watcher.preflight(actor_handle="asterion", expected_vault_id="thomas-vault")
+
+    assert report["ok"] is True
+    assert report["databases"][0]["open_sessions"] == 1
+    assert not (tmp_path / "watcher-state.json").exists()
+    assert not ledger_path.exists()
+    assert db_path.read_bytes() == before
