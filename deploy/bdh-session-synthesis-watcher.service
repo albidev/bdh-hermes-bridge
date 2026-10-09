@@ -1,0 +1,21 @@
+[Unit]
+Description=BDH Hermes standalone session synthesis watcher
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Projects/bdh-hermes-bridge
+Environment=HERMES_HOME=%h/.hermes
+Environment=PYTHONPATH=%h/Projects/bdh-hermes-bridge
+Environment=BDH_API_URL=http://127.0.0.1:8643
+Environment=BDH_SYNTHESIS_POLICY_FILE=%h/Projects/bdh-hermes-bridge/synthesis-policy.local.json
+Environment=BDH_SESSION_SYNTH_ENABLED=true
+Environment=BDH_SESSION_SYNTH_MIN_TURNS=1
+Environment=BDH_SESSION_SYNTH_MAX_CHARS=20000
+Environment=BDH_SESSION_SYNTHESIS_LEDGER_FILE=%h/.hermes/bdh-session-synthesis-ledger.json
+ExecStart=%h/.hermes/hermes-agent/venv/bin/python %h/Projects/bdh-hermes-bridge/session_synthesis_watcher.py --interval 60 --backlog-limit 0
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=default.target

@@ -1,8 +1,10 @@
 # Watcher deployment
 
-For an end-to-end, agent-oriented setup of the standalone session watcher, including authorization, dry-run, backlog safety and verification, start with [the session watcher setup runbook](../docs/session-watcher-setup.md). This page remains the low-level template reference for both launchd agents.
+For an end-to-end, agent-oriented setup of the standalone session watcher, including authorization, dry-run, backlog safety and verification, start with [the session watcher setup runbook](../docs/session-watcher-setup.md). This page is the low-level service-template reference.
 
-Both watchers are `launchd` agents. The plists in this directory are
+The two `.plist` files are **macOS launchd templates**. Linux uses the separate [systemd user-unit template](bdh-session-synthesis-watcher.service) for the session watcher only; hosted rooms remain a separate workflow and are not covered by that unit.
+
+On macOS, both watchers are `launchd` agents. Their plist files are
 **templates**: they use `__PYTHON__`, `__REPO__`, `__HERMES_HOME__` and
 `__ROOM_REGISTRY__` placeholders instead of machine paths, so the repository
 stays portable. A committed plist with absolute paths goes stale the moment
@@ -152,4 +154,4 @@ Both standalone watchers have separate persistent digest ledgers in normal opera
 
 Semantic vault hints are retrieval-only; deterministic hook scope authorizes per-turn writes, and the actor policy authorizes standalone watcher synthesis. No topic match grants write authority. New plugin code/flags require a new owning process; isolated discovery/stats does not require any production restart or Mission Control registry.
 
-Read [quickstart](../docs/quickstart.md), [operations](../docs/operations.md), [compatibility](../docs/compatibility.md) and [session synthesis](../docs/session-synthesis.md) before deploying watchers. The service templates above are advanced macOS recipes, not prerequisites for the bridge.
+Read [quickstart](../docs/quickstart.md), [operations](../docs/operations.md), [compatibility](../docs/compatibility.md) and [session synthesis](../docs/session-synthesis.md) before deploying watchers. The platform-specific service templates are optional; basic bridge tools do not require a watcher.

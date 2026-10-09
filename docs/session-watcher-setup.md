@@ -1,6 +1,6 @@
 # Standalone session-synthesis watcher: operator setup
 
-This runbook is for an operator or setup agent installing the **standalone session watcher** on macOS. It is deliberately separate from enabling the bridge plugin in a chat gateway.
+This runbook is for an operator or setup agent installing the **standalone session watcher** on macOS or Linux. It is deliberately separate from enabling the bridge plugin in a chat gateway.
 
 The watcher reads Hermes session databases read-only, waits for eligible TUI/Mission Control sessions to become idle, reconstructs bounded user/assistant turns, authorizes a destination vault from actor policy, and submits one `source=session_synthesis` request to BDH. It does not edit Hermes core. With Harness staging enabled, the request becomes a review candidate rather than an automatically published Markdown note.
 
@@ -14,9 +14,9 @@ There are three related but independent paths:
 |---|---|---|---|
 | Bridge per-turn hooks | Each agent API response | Current hook arguments | Plugin enabled in an owning Hermes process; may write independently of rewrite/synthesis flags |
 | Bridge in-process session synthesis | Hermes finalize/reset and bridge-owned idle watcher | Bridge's buffered turns | `BDH_SESSION_SYNTH_ENABLED=true` in the owning process |
-| **Standalone session watcher (this runbook)** | SessionDB live→idle transition, plus bounded startup backlog | Hermes `state.db` and profile DBs | launchd agent + `BDH_SESSION_SYNTH_ENABLED=true` + a valid actor policy |
+| **Standalone session watcher (this runbook)** | SessionDB live→idle transition, plus bounded startup backlog | Hermes `state.db` and profile DBs | launchd agent (macOS) or systemd user service (Linux) + `BDH_SESSION_SYNTH_ENABLED=true` + a valid actor policy |
 
-Do not enable the plugin or turn on conversation hooks merely to test the standalone watcher. Conversely, setting `BDH_SESSION_SYNTH_ENABLED=true` in a shell does not start a daemon. The LaunchAgent receives its own environment and must be bootstrapped into the correct logged-in user session.
+Do not enable the plugin or turn on conversation hooks merely to test the standalone watcher. Conversely, setting `BDH_SESSION_SYNTH_ENABLED=true` in a shell does not start a daemon. The macOS LaunchAgent or Linux systemd user service has its own environment and must be activated for the correct OS user and Hermes home.
 
 The standalone session watcher handles TUI and Mission Control 1:1 sessions. Hosted rooms use the separate room watcher and room registry; do not point both at the same ledger.
 
@@ -24,13 +24,13 @@ The standalone session watcher handles TUI and Mission Control 1:1 sessions. Hos
 
 The setup agent should complete these in order and stop rather than guess whenever an item is unresolved:
 
-1. **Discover, do not mutate:** identify macOS, the intended Hermes home/profile, the actual SessionDB path, bridge checkout, Python interpreter, Harness URL, configured vault IDs, staging flag, and current LaunchAgent state. Do not print secrets.
+1. **Discover, do not mutate:** identify whether the host is macOS or Linux, the intended Hermes home/profile, the actual SessionDB path, bridge checkout, Python interpreter, Harness URL, configured vault IDs, staging flag, and current launchd/systemd user-service state. Do not print secrets.
 2. **Get explicit operator decisions:** which actor/session is authorized, exact destination `vault_id`, whether a small bounded backlog may be submitted at startup, and whether transcript text may be sent to the configured Harness/model providers.
 3. **Prepare local policy:** map an addressed `@handle` to the exact vault ID, or explicitly opt the verified default-profile TUI/Mission Control sessions into the special `core` vault. Do not infer a destination from topic words or vault names.
 4. **Verify staging and provider policy:** if the requirement is “no automatic Markdown publication,” confirm `session_synthesis_staging_enabled: true` for the target vault in the running Harness. Separately inspect all other enabled write paths; this setting only gates session-synthesis application.
 5. **Run a dry-run:** use the real intended policy and SessionDB but `--dry-run --backlog-once` with a bounded limit. Review every printed destination/count. Dry-run must not POST or update the session watcher ledger.
-6. **Render and validate the LaunchAgent:** replace every template placeholder with verified absolute paths; validate the resulting plist before bootstrap.
-7. **Activate only after approval:** bootstrap only `ai.bdh.session-synthesis-watcher`; do not restart a Hermes gateway or Harness for this step.
+6. **Render and validate the platform service:** use the launchd plist on macOS or the systemd user unit on Linux; replace/verify all paths before activation.
+7. **Activate only after approval:** load/enable only `ai.bdh.session-synthesis-watcher`; do not restart a Hermes gateway or Harness for this step.
 8. **Verify live behavior:** verify the label/process, logs, authorized vault, audit correlation and pending-review candidate. A PID or ledger row alone is not proof that a candidate was staged.
 9. **Report the open state:** record whether backlog recovery was enabled, which vault was authorized (ID only), checks performed, and remaining limitations. Never report a candidate as published unless Markdown was read back and verified.
 
@@ -38,8 +38,8 @@ The setup agent should complete these in order and stop rather than guess whenev
 
 Required:
 
-- macOS with `launchd` and a logged-in GUI user session;
-- a local checkout of `bdh-hermes-bridge` containing `session_synthesis_watcher.py` and `deploy/ai.bdh.session-synthesis-watcher.plist`;
+- macOS with `launchd`, or Linux with `systemd` and a user manager;
+- a local checkout of `bdh-hermes-bridge` containing `session_synthesis_watcher.py` and the relevant service template (`deploy/ai.bdh.session-synthesis-watcher.plist` on macOS or `deploy/bdh-session-synthesis-watcher.service` on Linux);
 - a Python interpreter compatible with the installed Hermes package, with the Hermes SessionDB modules importable;
 - the correct `HERMES_HOME` for the profile whose sessions are in scope;
 - the BDH HTTP API reachable at the chosen `BDH_API_URL`;
@@ -62,7 +62,7 @@ The watcher’s default inputs are `$HERMES_HOME/state.db` and `$HERMES_HOME/bdh
 
 ## 4. Choose an authorization policy
 
-The policy is local operator configuration, intentionally gitignored. The default path is `synthesis-policy.local.json` beside the bridge module; the LaunchAgent template sets `BDH_SYNTHESIS_POLICY_FILE` explicitly. An absent, invalid, or non-authorizing policy means no synthesis.
+The policy is local operator configuration, intentionally gitignored. The service templates set `BDH_SYNTHESIS_POLICY_FILE` explicitly; if running manually, the default is `synthesis-policy.local.json` beside the bridge module. An absent, invalid, or non-authorizing policy means no synthesis.
 
 ### Option A: explicitly addressed actor for a personal/project vault
 
@@ -132,9 +132,9 @@ Expected outcome: only explicitly authorized sessions appear, each with the inte
 
 For a fresh install where no historical session should be considered, first dry-run with `--backlog-limit 0`. The live idle trigger only handles observed live→idle transitions; already-idle sessions need a later explicitly approved bounded backlog pass to be recovered.
 
-## 7. Render and install only the session LaunchAgent
+## 7. macOS: render and install the session LaunchAgent
 
-The committed plist is a template, not an installable file. Render absolute paths for the chosen checkout, Hermes home and interpreter. The deployment guide has a shell template for both watchers; this example renders **only the session watcher** and avoids shell substitution problems with paths:
+The committed plist is a macOS template, not an installable file. Render absolute paths for the chosen checkout, Hermes home and interpreter. The deployment guide has a shell template for both watchers; this example renders **only the session watcher** and avoids shell substitution problems with paths:
 
 ```bash
 export REPO="$HOME/Projects/bdh-hermes-bridge"
@@ -182,11 +182,51 @@ launchctl print "gui/$(id -u)/ai.bdh.session-synthesis-watcher"
 
 A plist edit is not applied to an already loaded service. To reload it, boot out and bootstrap this exact label; do not restart the Hermes gateway or BDH Harness for a plist-only change.
 
-## 8. Verify operation and candidate staging
+## 8. Linux: install the systemd user service
+
+The Python watcher uses standard filesystem/SQLite/process APIs and has no macOS-only runtime dependency. On Linux, run it as the **same OS user that owns the intended Hermes home and SessionDB**, using a systemd *user* unit—not a root/system service. The repository ships `deploy/bdh-session-synthesis-watcher.service` as a starting template. Its paths assume the common layout below; edit every path if the checkout, Hermes home or interpreter differs:
+
+- repository: `%h/Projects/bdh-hermes-bridge`;
+- Hermes home: `%h/.hermes`;
+- interpreter: `%h/.hermes/hermes-agent/venv/bin/python`;
+- policy: repository `synthesis-policy.local.json`;
+- BDH API: `http://127.0.0.1:8643`.
+
+The template sets `--backlog-limit 0` so first activation does not submit old sessions. To activate recovery later, first inspect it with the dry-run command in section 6, then run an explicitly approved bounded one-shot with the same policy and ledger.
+
+```bash
+REPO="$HOME/Projects/bdh-hermes-bridge"
+UNIT_DIR="$HOME/.config/systemd/user"
+UNIT="$UNIT_DIR/bdh-session-synthesis-watcher.service"
+mkdir -p "$UNIT_DIR" "$HOME/.hermes"
+install -m 600 "$REPO/deploy/bdh-session-synthesis-watcher.service" "$UNIT"
+```
+
+Before enabling, edit the installed unit if any assumed path differs, and inspect the rendered values. The policy and ledger paths must be private and distinct from the room watcher's. Validate and start it as the unprivileged target user:
+
+```bash
+systemd-analyze --user verify "$UNIT"
+systemctl --user daemon-reload
+systemctl --user enable --now bdh-session-synthesis-watcher.service
+systemctl --user status bdh-session-synthesis-watcher.service --no-pager
+journalctl --user -u bdh-session-synthesis-watcher.service -n 100 --no-pager
+```
+
+`systemctl --user enable --now` enables the unit for that user's systemd manager and starts it immediately; it does not require a system-wide install or root. By default the user manager may only be alive during a login session. Use `loginctl enable-linger "$USER"` only if the operator explicitly requires the watcher to keep running without an interactive login; this changes the user's service lifetime and must not be enabled implicitly.
+
+To stop or disable only this watcher:
+
+```bash
+systemctl --user disable --now bdh-session-synthesis-watcher.service
+```
+
+After unit changes, run `systemctl --user daemon-reload` and restart this unit only after reviewing the diff. For logs use `journalctl --user -u bdh-session-synthesis-watcher.service`; Linux has no LaunchAgent plist/log paths. The bridge's Python watcher tests run in the repository's Ubuntu CI, but that is not an end-to-end test of a particular host's systemd manager, Hermes home, API or provider configuration.
+
+## 9. Verify operation and candidate staging
 
 Verify each layer independently:
 
-1. **launchd:** `launchctl print gui/$(id -u)/ai.bdh.session-synthesis-watcher` shows the expected program and environment. Check the process and the configured stdout/stderr logs.
+1. **Service manager:** on macOS, `launchctl print` shows the expected program and environment; on Linux, `systemctl --user status` shows the correct active unit. Check the process and the configured stdout/stderr or journal logs.
 2. **Policy:** logs show unauthorized sessions skipped; there must be no fallback to the Harness default vault for an unauthorized session.
 3. **Harness:** confirm `session_synthesis_staging_enabled` for that vault before a real request. Check health/stats and the candidate endpoint without exposing note or transcript text.
 4. **After an approved test session becomes idle:** check Harness synthesis audit and the exact candidate's status/source/vault. Expect `source=session_synthesis` and `pending_review`; a candidate is not yet a published note.
@@ -197,19 +237,23 @@ A watcher PID, clean log, incremented ledger, HTTP 200, or non-empty synthesis r
 
 The watcher idle detector is transition-based. It notices a live session becoming idle while the watcher is running. The startup backlog is a separate bounded recovery path for sessions already idle before startup. `--once` only scans for transitions; to inspect already-idle sessions use `--dry-run --backlog-once` with a fresh review and a small limit.
 
-## 9. Stop, disable, rollback
+## 10. Stop, disable, rollback
 
-Disable only the watcher agent:
+Disable only the watcher service on the current OS:
 
 ```bash
+# macOS
 launchctl bootout "gui/$(id -u)/ai.bdh.session-synthesis-watcher"
+
+# Linux
+systemctl --user disable --now bdh-session-synthesis-watcher.service
 ```
 
-For permanent disablement, remove the local plist after bootout and set `allow_default_core_sessions` false / remove the actor mapping in the local policy. Do not delete the SessionDB, vault, audit files, staging candidates or ledgers as part of disablement. Preserve them unless separately asked to remove data.
+For permanent disablement, boot out/disable the service, remove its local plist or user unit, and set `allow_default_core_sessions` false / remove the actor mapping in the local policy. Do not delete the SessionDB, vault, audit files, staging candidates or ledgers as part of disablement. Preserve them unless separately asked to remove data.
 
 For rollback after an unexpected candidate or write: stop the watcher first; preserve logs, policy, ledger, Harness audit and candidate JSON; identify whether any Markdown changed; back up the exact affected files before a reviewed revert. Do not replay a possibly accepted synthesis POST after a timeout: it is non-idempotent.
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 | Symptom | Likely check |
 |---|---|
@@ -217,13 +261,13 @@ For rollback after an unexpected candidate or write: stop the watcher first; pre
 | Default profile session is skipped | Expected unless the verified default DB + profile/source gate is satisfied and `allow_default_core_sessions: true` is explicitly configured. |
 | A client/project 1:1 session is skipped | Add an explicit addressed `@handle` → exact vault mapping; do not authorize by topic or assume profile identity is enough. |
 | Wrong vault appears in dry-run | Stop. Correct the policy/handle/vault ID; do not bootstrap. |
-| Process exits/restarts repeatedly | Check `launchctl print`, plist lint, executable/imports, HOME/PYTHONPATH, file permissions and stderr log. |
+| Process exits/restarts repeatedly | On macOS, check `launchctl print` and plist lint; on Linux, check `systemctl --user status` and `systemd-analyze --user verify`. Check executable/imports, HOME/PYTHONPATH, file permissions and stderr/journal logs. |
 | HTTP/API failure | Check the exact `BDH_API_URL`, Harness `/health`, selected vault, and provider availability. Do not replay ambiguous POSTs. |
 | Candidate not visible | Confirm request reached Harness audit, staging is enabled on the target vault, and use the corresponding `synthesis_id`/session correlation. A ledger row alone is insufficient. |
 | Dry-run appears to submit | Confirm `--dry-run` is present and use the session watcher (not the room watcher); session dry-run returns before POST and ledger recording. |
 | Old sessions not seen | Live→idle trigger cannot observe an already-idle session. Run a reviewed bounded `--dry-run --backlog-once`, then an explicitly approved bounded recovery if needed. |
 
-## 11. Data handling and limits
+## 12. Data handling and limits
 
 The watcher opens Hermes SessionDB read-only, but it reconstructs raw user/assistant text in memory and submits a bounded transcript to the configured Harness endpoint. The selected Harness completion provider may be local or cloud; embeddings have their own provider path. Transcript hashes and audit metadata do not make the transcript anonymous or remove it from Hermes databases, provider requests, candidate staging, or approved notes.
 

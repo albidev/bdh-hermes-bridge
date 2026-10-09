@@ -6,7 +6,7 @@ This is experimental software, not a versioned stable API promise. The bridge is
 
 [CI](../.github/workflows/ci.yml) runs on `ubuntu-latest` with Python **3.11, 3.12 and 3.13**, installing [requirements-ci.txt](../requirements-ci.txt). That file currently selects `hermes-agent>=0.19,<0.20`. This is the **test dependency range**, not proof that every older/newer core version is supported or that every hook first appeared in 0.19.
 
-A local source checkout may differ from the CI-installed package. Report the exact Hermes version/commit and Python when filing a failure. No native Windows/macOS CI or all-provider guarantee is implied by the Linux matrix.
+A local source checkout may differ from the CI-installed package. Report the exact Hermes version/commit and Python when filing a failure. The standalone session-watcher Python logic is exercised by the Ubuntu CI suite; the launchd/systemd service-manager lifecycle is not end-to-end tested on CI. No native Windows/macOS CI or all-provider guarantee is implied by the Linux matrix.
 
 ## Actual integration surface
 
